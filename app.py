@@ -1,9 +1,227 @@
-from flask import Flask, jsonify, request, g
+from flask import Flask, jsonify, request, g, send_from_directory, url_for
 import sqlite3
 import os
 from datetime import datetime
+from werkzeug.utils import secure_filename
+import PyPDF2
+from typing import List, Dict, Any, Optional
+
+# アップロード設定
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'pdf', 'docx', 'doc'}
+MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB
+
+# エラーメッセージ
+error_messages = {
+    'no_file': 'ファイルが選択されていません',
+    'invalid_extension': '許可されていないファイル形式です。PDFまたはWord文書をアップロードしてください。',
+    'file_too_large': f'ファイルサイズが大きすぎます。{MAX_FILE_SIZE // (1024*1024)}MB以下のファイルをアップロードしてください。',
+    'upload_failed': 'ファイルのアップロードに失敗しました。',
+    'processing_error': 'ファイルの処理中にエラーが発生しました。',
+    'invalid_file': 'ファイルが破損しているか、サポートされていない形式です。'
+}
 
 app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
+
+# ファイルの拡張子チェック
+def allowed_file(filename: str) -> bool:
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# PDFからテキストを抽出
+def extract_text_from_pdf(filepath: str) -> str:
+    text = ""
+    try:
+        with open(filepath, 'rb') as file:
+            reader = PyPDF2.PdfReader(file)
+            for page in reader.pages:
+                text += page.extract_text() + "\n"
+    except Exception as e:
+        app.logger.error(f"PDFの解析中にエラーが発生しました: {e}")
+    return text
+
+# Word文書からテキストを抽出
+def extract_text_from_docx(filepath: str) -> str:
+    try:
+        import docx2txt
+        return docx2txt.process(filepath)
+    except Exception as e:
+        app.logger.error(f"Word文書の解析中にエラーが発生しました: {e}")
+        return ""
+
+# スキルカテゴリ定義
+SKILL_CATEGORIES = {
+    'programming': {
+        'name': 'プログラミング言語',
+        'keywords': {
+            'Python': {'aliases': ['python', 'パイソン'], 'level': 3},
+            'JavaScript': {'aliases': ['javascript', 'js', 'ジャバスクリプト'], 'level': 3},
+            'TypeScript': {'aliases': ['typescript', 'ts'], 'level': 3},
+            'Java': {'aliases': ['java', 'ジャバ'], 'level': 3},
+            'C++': {'aliases': ['c++', 'cpp', 'シープラスプラス'], 'level': 3},
+            'C#': {'aliases': ['c#', 'csharp', 'シーシャープ'], 'level': 3},
+            'Ruby': {'aliases': ['ruby', 'ルビー'], 'level': 3},
+            'PHP': {'aliases': ['php', 'ピーエイチピー'], 'level': 3},
+            'Go': {'aliases': ['go', 'golang', 'ゴー'], 'level': 3},
+            'Rust': {'aliases': ['rust', 'ラスト'], 'level': 2},
+            'Swift': {'aliases': ['swift', 'スウィフト'], 'level': 2},
+            'Kotlin': {'aliases': ['kotlin', 'コトリン'], 'level': 2},
+        }
+    },
+    'framework': {
+        'name': 'フレームワーク',
+        'keywords': {
+            'Django': {'aliases': ['django', 'ジャンゴ'], 'level': 3},
+            'Flask': {'aliases': ['flask', 'フラスク'], 'level': 3},
+            'FastAPI': {'aliases': ['fastapi', 'ファストエーピーアイ'], 'level': 3},
+            'React': {'aliases': ['react', 'リアクト'], 'level': 3},
+            'Vue.js': {'aliases': ['vue', 'vue.js', 'ビュージェーエス'], 'level': 3},
+            'Angular': {'aliases': ['angular', 'アンギュラー'], 'level': 3},
+            'Node.js': {'aliases': ['node', 'node.js', 'ノード'], 'level': 3},
+            'Spring': {'aliases': ['spring', 'スプリング'], 'level': 3},
+            'Laravel': {'aliases': ['laravel', 'ララベル'], 'level': 2},
+            'Ruby on Rails': {'aliases': ['rails', 'ruby on rails', 'ルビーオンレイルズ'], 'level': 2},
+        }
+    },
+    'cloud': {
+        'name': 'クラウド',
+        'keywords': {
+            'AWS': {'aliases': ['aws', 'amazon web services'], 'level': 3},
+            'Azure': {'aliases': ['azure', 'アジュール'], 'level': 3},
+            'GCP': {'aliases': ['gcp', 'google cloud', 'google cloud platform'], 'level': 3},
+            'Docker': {'aliases': ['docker', 'ドッカー'], 'level': 3},
+            'Kubernetes': {'aliases': ['kubernetes', 'k8s', 'クバネティス'], 'level': 3},
+            'Terraform': {'aliases': ['terraform', 'テラフォーム'], 'level': 2},
+            'Ansible': {'aliases': ['ansible', 'アンシブル'], 'level': 2},
+            'Serverless': {'aliases': ['serverless', 'サーバーレス'], 'level': 2},
+        }
+    },
+    'database': {
+        'name': 'データベース',
+        'keywords': {
+            'SQL': {'aliases': ['sql', 'エスキューエル'], 'level': 3},
+            'PostgreSQL': {'aliases': ['postgresql', 'postgres', 'ポストグレ'], 'level': 3},
+            'MySQL': {'aliases': ['mysql', 'マイエスキューエル'], 'level': 3},
+            'MongoDB': {'aliases': ['mongodb', 'モンゴ'], 'level': 3},
+            'Redis': {'aliases': ['redis', 'レディス'], 'level': 3},
+            'Oracle': {'aliases': ['oracle', 'オラクル'], 'level': 2},
+            'SQLite': {'aliases': ['sqlite', 'エスキューライト'], 'level': 2},
+            'DynamoDB': {'aliases': ['dynamodb', 'ダイナモ'], 'level': 2},
+        }
+    },
+    'ai_ml': {
+        'name': 'AI/機械学習',
+        'keywords': {
+            '機械学習': {'aliases': ['machine learning', 'マシンラーニング'], 'level': 3},
+            '深層学習': {'aliases': ['deep learning', 'ディープラーニング'], 'level': 3},
+            'データ分析': {'aliases': ['data analysis', 'データアナリシス'], 'level': 3},
+            'データサイエンス': {'aliases': ['data science', 'データサイエンス'], 'level': 3},
+            'AI': {'aliases': ['ai', '人工知能', 'artificial intelligence'], 'level': 3},
+            'TensorFlow': {'aliases': ['tensorflow', 'テンソルフロー'], 'level': 2},
+            'PyTorch': {'aliases': ['pytorch', 'パイトーチ'], 'level': 2},
+            'scikit-learn': {'aliases': ['scikit-learn', 'sklearn', 'サイキットラーン'], 'level': 2},
+        }
+    },
+    'devops': {
+        'name': 'DevOps/ツール',
+        'keywords': {
+            'Git': {'aliases': ['git', 'ギット'], 'level': 3},
+            'GitHub': {'aliases': ['github', 'ギットハブ'], 'level': 3},
+            'GitLab': {'aliases': ['gitlab', 'ギットラボ'], 'level': 3},
+            'CI/CD': {'aliases': ['ci/cd', 'continuous integration', '継続的インテグレーション'], 'level': 3},
+            'Jenkins': {'aliases': ['jenkins', 'ジェンキンス'], 'level': 3},
+            'GitHub Actions': {'aliases': ['github actions', 'ギットハブアクションズ'], 'level': 3},
+            'CircleCI': {'aliases': ['circleci', 'サークルシーアイ'], 'level': 2},
+            'Docker Compose': {'aliases': ['docker-compose', 'docker compose', 'ドッカーコンポーズ'], 'level': 2},
+        }
+    },
+    'methodology': {
+        'name': '開発手法',
+        'keywords': {
+            'アジャイル': {'aliases': ['agile', 'アジャイル開発'], 'level': 3},
+            'スクラム': {'aliases': ['scrum', 'スクラム開発'], 'level': 3},
+            'DevOps': {'aliases': ['devops', 'デブオプス'], 'level': 3},
+            'TDD': {'aliases': ['tdd', 'テスト駆動開発'], 'level': 2},
+            'BDD': {'aliases': ['bdd', '振る舞い駆動開発'], 'level': 2},
+            'CI/CD': {'aliases': ['ci/cd', '継続的インテグレーション/デプロイ'], 'level': 3},
+            'マイクロサービス': {'aliases': ['microservice', 'マイクロサービスアーキテクチャ'], 'level': 2},
+        }
+    }
+}
+
+def extract_skills(text: str) -> List[Dict[str, Any]]:
+    """
+    テキストからスキルを抽出し、カテゴリと重要度を付与して返す
+    
+    Args:
+        text (str): 解析対象のテキスト
+        
+    Returns:
+        List[Dict[str, Any]]: 抽出されたスキルのリスト
+            [
+                {
+                    'name': 'スキル名',
+                    'category': 'カテゴリ名',
+                    'level': 1-3,  # 1: 初心者, 2: 中級者, 3: 上級者
+                    'level_name': '上級',
+                    'category_name': 'プログラミング言語',
+                    'matched_text': ['マッチしたテキスト1', 'マッチしたテキスト2']
+                },
+                ...
+            ]
+    """
+    text_lower = text.lower()
+    found_skills = {}
+    
+    # 各カテゴリのキーワードを検索
+    for category_id, category_data in SKILL_CATEGORIES.items():
+        for skill_name, skill_data in category_data['keywords'].items():
+            # エイリアスを含むすべてのキーワードで検索
+            search_terms = [skill_name.lower()] + skill_data['aliases']
+            matched_texts = []
+            
+            for term in search_terms:
+                if term in text_lower:
+                    matched_texts.append(term)
+            
+            # いずれかのキーワードにマッチした場合
+            if matched_texts:
+                if skill_name not in found_skills:
+                    found_skills[skill_name] = {
+                        'name': skill_name,
+                        'category': category_id,
+                        'category_name': category_data['name'],
+                        'level': skill_data['level'],
+                        'level_name': get_level_name(skill_data['level']),
+                        'matched_text': matched_texts,
+                        'count': len(matched_texts)
+                    }
+                else:
+                    # 既存のスキルにマッチしたテキストを追加
+                    existing_matches = set(found_skills[skill_name]['matched_text'])
+                    new_matches = set(matched_texts) - existing_matches
+                    if new_matches:
+                        found_skills[skill_name]['matched_text'].extend(new_matches)
+                        found_skills[skill_name]['count'] = len(found_skills[skill_name]['matched_text'])
+    
+    # リストに変換して返す
+    skills_list = list(found_skills.values())
+    
+    # 重要度（出現回数とレベルの積）でソート
+    skills_list.sort(key=lambda x: (x['count'] * x['level']), reverse=True)
+    
+    return skills_list
+
+def get_level_name(level: int) -> str:
+    """スキルレベルを表す文字列を返す"""
+    if level == 1:
+        return '初級'
+    elif level == 2:
+        return '中級'
+    else:
+        return '上級'
 
 # データベースファイル名
 DB_FILE = 'ses_match.db'
@@ -109,6 +327,113 @@ def init_db():
         ])
     
     conn.commit()
+
+# 静的ファイルの提供
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+# ファイルアップロードAPI
+@app.route('/api/upload', methods=['POST'])
+def upload_file():
+    # ファイルがリクエストに含まれているか確認
+    if 'file' not in request.files:
+        return jsonify({
+            'success': False,
+            'error': error_messages['no_file'],
+            'code': 'NO_FILE'
+        }), 400
+    
+    file = request.files['file']
+    
+    # ファイル名が空でないか確認
+    if file.filename == '':
+        return jsonify({
+            'success': False,
+            'error': error_messages['no_file'],
+            'code': 'NO_FILE_SELECTED'
+        }), 400
+    
+    # ファイル拡張子の検証
+    if not allowed_file(file.filename):
+        return jsonify({
+            'success': False,
+            'error': error_messages['invalid_extension'],
+            'code': 'INVALID_EXTENSION',
+            'allowed_extensions': list(ALLOWED_EXTENSIONS)
+        }), 400
+        
+    # ファイルサイズの検証
+    file.seek(0, os.SEEK_END)
+    file_length = file.tell()
+    file.seek(0)
+    
+    if file_length > MAX_FILE_SIZE:
+        return jsonify({
+            'success': False,
+            'error': error_messages['file_too_large'],
+            'code': 'FILE_TOO_LARGE',
+            'max_size_mb': MAX_FILE_SIZE // (1024*1024),
+            'file_size_mb': round(file_length / (1024*1024), 2)
+        }), 400
+    
+    try:
+        # 安全なファイル名に変換
+        filename = secure_filename(file.filename)
+        
+        # アップロードディレクトリが存在することを確認
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        
+        # ファイルを保存
+        try:
+            file.save(filepath)
+        except IOError as e:
+            app.logger.error(f'ファイルの保存中にエラーが発生しました: {str(e)}')
+            return jsonify({
+                'success': False,
+                'error': error_messages['upload_failed'],
+                'code': 'UPLOAD_FAILED'
+            }), 500
+        
+        # ファイルタイプに応じてテキストを抽出
+        text = ""
+        if filename.lower().endswith('.pdf'):
+            text = extract_text_from_pdf(filepath)
+        elif filename.lower().endswith(('.docx', '.doc')):
+            text = extract_text_from_docx(filepath)
+        else:
+            return jsonify({
+                'success': False,
+                'error': error_messages['invalid_file'],
+                'code': 'INVALID_FILE'
+            }), 400
+        
+        if not text.strip():
+            return jsonify({
+                'success': False,
+                'error': error_messages['invalid_file'],
+                'code': 'INVALID_FILE'
+            }), 400
+        
+        # スキルを抽出
+        skills = extract_skills(text)
+        
+        return jsonify({
+            'success': True,
+            'filename': filename,
+            'skills': skills,
+            'text_preview': text[:500] + '...' if len(text) > 500 else text
+        })
+        
+    except Exception as e:
+        app.logger.error(f'エラーが発生しました: {str(e)}', exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': error_messages['processing_error'],
+            'code': 'PROCESSING_ERROR',
+            'details': str(e)
+        }), 500
 
 # APIエンドポイント
 @app.route('/')

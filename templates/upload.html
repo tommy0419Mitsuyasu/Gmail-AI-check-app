@@ -1,9 +1,10 @@
-{% extends "base.html" %}
+{% extends "base.html %}
 
 {% block content %}
-<div class="max-w-3xl mx-auto">
+<div class="max-w-4xl mx-auto px-4 py-8">
     <div class="bg-white rounded-lg shadow-md p-8">
         <h1 class="text-2xl font-bold text-gray-800 mb-6">スキルシートをアップロード</h1>
+        <p class="text-gray-600 mb-6">PDFまたはWord形式のスキルシートをアップロードして、スキルを自動抽出します。</p>
         
         <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center mb-8">
             <div id="dropZone" class="cursor-pointer">
@@ -13,7 +14,8 @@
                 <label for="fileInput" class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg cursor-pointer transition">
                     ファイルを選択
                 </label>
-                <input id="fileInput" type="file" class="hidden" accept=".pdf,.docx,.doc,.txt">
+                <input id="fileInput" type="file" class="hidden" accept=".pdf,.docx,.doc">
+                <input type="hidden" id="engineerId" value="1">
             </div>
             <div id="fileInfo" class="mt-4 hidden">
                 <p class="text-gray-700">選択されたファイル: <span id="fileName" class="font-medium"></span></p>
@@ -46,8 +48,61 @@
 
             <div id="skillsExtracted" class="mb-8">
                 <h3 class="text-lg font-medium text-gray-800 mb-4">抽出されたスキル</h3>
-                <div id="skillsList" class="flex flex-wrap gap-2">
-                    <!-- スキルが動的に挿入されます -->
+                <div id="skillsByCategory">
+                    <!-- カテゴリごとにスキルが動的に挿入されます -->
+                </div>
+            </div>
+
+            <div class="mt-8">
+                <h3 class="text-lg font-medium text-gray-800 mb-4">抽出されたテキスト（プレビュー）</h3>
+                <div id="textPreview" class="bg-gray-50 p-4 rounded-lg text-sm text-gray-600 whitespace-pre-wrap overflow-auto max-h-60">
+                    <!-- 抽出されたテキストが表示されます -->
+                </div>
+            </div>
+
+            <div class="mt-8 flex justify-between">
+                <button id="backToUpload" class="bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium py-2 px-6 rounded-lg transition">
+                    <i class="fas fa-arrow-left mr-2"></i>別のファイルをアップロード
+                </button>
+                <button id="saveSkills" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg transition">
+                    スキルを保存する <i class="fas fa-save ml-2"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- エラーメッセージ表示用 -->
+        <div id="errorMessage" class="hidden mt-4 p-4 rounded-lg">
+            <div class="flex items-start">
+                <div class="flex-shrink-0">
+                    <i id="errorIcon" class="fas fa-exclamation-circle text-xl"></i>
+                </div>
+                <div class="ml-3">
+                    <h3 id="errorTitle" class="text-sm font-medium"></h3>
+                    <div id="errorDetails" class="mt-1 text-sm">
+                        <p id="errorText"></p>
+                        <ul id="errorList" class="list-disc pl-5 mt-1"></ul>
+                    </div>
+                    <div id="errorResolution" class="mt-2 text-sm">
+                        <p id="resolutionText" class="font-medium"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ローディングオーバーレイ -->
+<div id="loadingOverlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+    <div class="bg-white p-6 rounded-lg shadow-lg max-w-sm w-full">
+        <div class="flex items-center">
+            <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3"></div>
+            <p class="text-gray-700">ファイルを処理中です...</p>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-2.5 mt-4">
+            <div id="progressBar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+        </div>
+    </div>
+</div>
                 </div>
             </div>
 
@@ -179,90 +234,220 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // アップロードボタンがクリックされたとき
-    uploadBtn.addEventListener('click', function() {
-        if (fileInput.files.length === 0) return;
+    // エラーメッセージを表示する関数
+    function showError(error) {
+        const errorMessage = document.getElementById('errorMessage');
+        const errorTitle = document.getElementById('errorTitle');
+        const errorText = document.getElementById('errorText');
+        const errorList = document.getElementById('errorList');
+        const errorIcon = document.getElementById('errorIcon');
+        const resolutionText = document.getElementById('resolutionText');
         
-        // アップロード中のUIを表示
-        fileInfo.classList.add('hidden');
-        uploadProgress.classList.remove('hidden');
+        // エラーメッセージをリセット
+        errorList.innerHTML = '';
         
-        // プログレスバーのアニメーション
-        let progress = 0;
-        const interval = setInterval(() => {
-            progress += Math.random() * 10;
-            if (progress > 90) {
-                progress = 90;
-                clearInterval(interval);
-            }
-            progressBar.style.width = `${progress}%`;
-        }, 200);
+        // エラータイプに応じたスタイルとメッセージを設定
+        let title = 'エラーが発生しました';
+        let message = error.message || '不明なエラーが発生しました';
+        let iconClass = 'fa-exclamation-circle text-red-500';
+        let bgClass = 'bg-red-50 border-l-4 border-red-500';
+        let resolution = '';
         
-        // 実際のアップロード処理（ここではシミュレーション）
+        // エラータイプに応じたメッセージを設定
+        switch(error.code) {
+            case 'NO_FILE':
+            case 'NO_FILE_SELECTED':
+                title = 'ファイルが選択されていません';
+                resolution = 'ファイルを選択してからもう一度お試しください。';
+                break;
+                
+            case 'INVALID_EXTENSION':
+                title = 'サポートされていないファイル形式です';
+                message = `サポートされている形式: ${error.allowed_extensions.join(', ').toUpperCase()}`;
+                resolution = 'PDFまたはWord文書をアップロードしてください。';
+                break;
+                
+            case 'FILE_TOO_LARGE':
+                title = 'ファイルサイズが大きすぎます';
+                message = `ファイルサイズ: ${error.file_size_mb}MB (最大: ${error.max_size_mb}MB)`;
+                resolution = 'ファイルサイズを小さくしてから再度アップロードしてください。';
+                break;
+                
+            case 'UPLOAD_FAILED':
+                title = 'ファイルのアップロードに失敗しました';
+                resolution = '時間を置いてから再度お試しください。';
+                break;
+                
+            case 'INVALID_FILE':
+                title = 'ファイルが破損しているか、サポートされていません';
+                resolution = '別のファイルでお試しください。';
+                break;
+                
+            case 'PROCESSING_ERROR':
+                title = 'ファイルの処理中にエラーが発生しました';
+                resolution = '時間を置いてから再度お試しいただくか、別のファイルをお試しください。';
+                break;
+        }
+        
+        // エラーメッセージを設定
+        errorTitle.textContent = title;
+        errorText.textContent = message;
+        resolutionText.textContent = resolution;
+        
+        // エラー詳細がある場合はリストに追加
+        if (error.details) {
+            const detailItem = document.createElement('li');
+            detailItem.textContent = error.details;
+            errorList.appendChild(detailItem);
+        }
+        
+        // スタイルを適用
+        errorMessage.className = `${bgClass} p-4 rounded-lg mt-4`;
+        errorIcon.className = `fas ${iconClass} text-xl`;
+        
+        // エラーメッセージを表示
+        errorMessage.classList.remove('hidden');
+        
+        // 5秒後にエラーメッセージを非表示にする
         setTimeout(() => {
-            clearInterval(interval);
-            progressBar.style.width = '100%';
+            errorMessage.classList.add('hidden');
+        }, 10000);
+    }
+    
+    // アップロードボタンがクリックされたとき
+    uploadBtn.addEventListener('click', async function() {
+        if (fileInput.files.length === 0) {
+            showError({
+                code: 'NO_FILE_SELECTED',
+                message: 'アップロードするファイルを選択してください。'
+            });
+            return;
+        }
+        
+        const file = fileInput.files[0];
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('engineer_id', document.getElementById('engineerId').value);
+
+        // プログレスバーを表示
+        uploadProgress.classList.remove('hidden');
+        const progressBar = document.getElementById('progressBar');
+        
+        try {
+            const response = await fetch('/upload/skillsheet/', {
+                method: 'POST',
+                body: formData
+            });
             
-            // 解析結果を表示
-            setTimeout(() => {
-                uploadProgress.classList.add('hidden');
-                resultSection.classList.remove('hidden');
-                
-                // サンプルスキルを追加（実際にはバックエンドから取得）
-                const sampleSkills = ['Python', 'JavaScript', 'SQL', 'AWS', 'Docker', 'React'];
-                skillsList.innerHTML = '';
-                sampleSkills.forEach(skill => {
-                    const skillTag = document.createElement('span');
-                    skillTag.className = 'skill-tag';
-                    skillTag.innerHTML = `
-                        ${skill}
-                        <button type="button" class="remove-skill">
-                            <i class="fas fa-times"></i>
-                        </button>
-                    `;
-                    skillsList.appendChild(skillTag);
-                });
-                
-                // スキル削除ボタンのイベント
-                document.querySelectorAll('.remove-skill').forEach(button => {
-                    button.addEventListener('click', function() {
-                        this.closest('.skill-tag').remove();
-                    });
-                });
-            }, 500);
-        }, 2000);
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'ファイルのアップロードに失敗しました');
+            }
+            
+            const result = await response.json();
+            showResults(result.skills);
+            
+        } catch (error) {
+            console.error('Error:', error);
+            showError(error);
+            uploadProgress.classList.add('hidden');
+        } finally {
+            uploadProgress.classList.add('hidden');
+        }
     });
+    
+    // 結果を表示する関数
+    function showResults(skills) {
+        const skillsByCategory = document.getElementById('skillsByCategory');
+        skillsByCategory.innerHTML = '';
+        
+        // カテゴリごとにスキルをグループ化
+        const categories = {};
+        skills.forEach(skill => {
+            if (!categories[skill.category_name]) {
+                categories[skill.category_name] = [];
+            }
+            categories[skill.category_name].push(skill);
+        });
+        
+        // 各カテゴリのスキルを表示
+        for (const [categoryName, categorySkills] of Object.entries(categories)) {
+            const categoryElement = document.createElement('div');
+            categoryElement.className = 'mb-6';
+            
+            // カテゴリヘッダー
+            const categoryIcon = getCategoryIcon(categorySkills[0].category);
+            categoryElement.innerHTML = `
+                <div class="flex items-center mb-3">
+                    <i class="fas ${categoryIcon} text-blue-500 mr-2"></i>
+                    <h4 class="text-md font-semibold text-gray-800">${categoryName}</h4>
+                    <span class="ml-2 text-sm text-gray-500">${categorySkills.length}スキル</span>
+                </div>
+                <div class="flex flex-wrap gap-2 mb-4" id="skills-${categoryName}"></div>
+            `;
+            
+            skillsByCategory.appendChild(categoryElement);
+            
+            // スキルを追加
+            const skillsContainer = document.getElementById(`skills-${categoryName}`);
+            categorySkills.forEach(skill => {
+                const skillElement = document.createElement('div');
+                skillElement.className = 'flex items-center bg-white border border-gray-200 rounded-full px-3 py-1 text-sm shadow-sm hover:shadow transition-shadow';
+                skillElement.title = `${skill.name} (${skill.count}回言及)`;
+                
+                skillElement.innerHTML = `
+                    <span class="font-medium text-gray-800">${skill.name}</span>
+                    <div class="ml-2 flex items-center">
+                        ${getSkillLevelBadge(skill.level_name)}
+                        <span class="ml-1 text-xs text-gray-500">×${skill.count}</span>
+                    </div>
+                `;
+                
+                skillsContainer.appendChild(skillElement);
+            });
+        }
+        
+        document.getElementById('resultSection').classList.remove('hidden');
+        document.getElementById('uploadProgress').classList.add('hidden');
+        
+        // 結果セクションまでスクロール
+        document.getElementById('resultSection').scrollIntoView({ behavior: 'smooth' });
+    }
     
     // 戻るボタン
     backToUpload.addEventListener('click', function() {
         resultSection.classList.add('hidden');
         fileInfo.classList.remove('hidden');
-        fileInput.value = '';
-        fileName.textContent = '';
     });
     
-    // スキルを追加ボタン
+    // 案件を探すボタン
+    findProjectsBtn.addEventListener('click', function() {
+        window.location.href = '/projects';
+    });
+    
+    // スキル追加ボタン
     addSkillBtn.addEventListener('click', function() {
         const skillField = document.createElement('div');
         skillField.className = 'flex space-x-2';
         skillField.innerHTML = `
-            <input type="text" placeholder="スキル名" class="flex-1 p-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-            <select class="p-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+            <input type="text" placeholder="スキル名" class="flex-1 border border-gray-300 rounded-md px-3 py-2">
+            <select class="border border-gray-300 rounded-md px-3 py-2">
                 <option value="beginner">初級</option>
-                <option value="intermediate" selected>中級</option>
-                <option value="expert">上級</option>
+                <option value="intermediate">中級</option>
+                <option value="advanced">上級</option>
             </select>
             <button type="button" class="remove-skill-btn text-red-500 hover:text-red-700">
                 <i class="fas fa-times"></i>
             </button>
         `;
         
-        skillsForm.appendChild(skillField);
-        
         // 削除ボタンのイベント
-        skillField.querySelector('.remove-skill-btn').addEventListener('click', function() {
-            skillField.remove();
+        const removeBtn = skillField.querySelector('.remove-skill-btn');
+        removeBtn.addEventListener('click', function() {
+            skillsForm.removeChild(skillField);
         });
+        
+        skillsForm.appendChild(skillField);
     });
     
     // 案件を探すボタン

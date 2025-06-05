@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey, DateTime
 from sqlalchemy.orm import Session, relationship
@@ -6,8 +6,13 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
+import os
+import shutil
+from pathlib import Path
+import tempfile
+from fastapi.staticfiles import StaticFiles
 
 # データベース接続
 SQLALCHEMY_DATABASE_URL = "sqlite:///./sql_app.db"
@@ -18,43 +23,43 @@ Base = declarative_base()
 # モデル定義
 class Engineer(Base):
     __tablename__ = "engineers"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String)
-    email = Column(String, unique=True, index=True)
-    current_role = Column(String)
-    location = Column(String)
-    total_experience_years = Column(Float)
+    id: int = Column(Integer, primary_key=True, index=True)
+    name: str = Column(String)
+    email: str = Column(String, unique=True, index=True)
+    current_role: str = Column(String)
+    location: str = Column(String)
+    total_experience_years: float = Column(Float)
     skills = relationship("Skill", back_populates="engineer")
 
 class Project(Base):
     __tablename__ = "projects"
-    id = Column(Integer, primary_key=True, index=True)
-    project_name = Column(String)
-    client_name = Column(String)
-    description = Column(String)
-    location = Column(String)
-    work_type = Column(String)
-    start_date = Column(DateTime, default=datetime.utcnow)
-    duration_months = Column(Integer)
-    min_budget = Column(Integer)
-    max_budget = Column(Integer)
+    id: int = Column(Integer, primary_key=True, index=True)
+    project_name: str = Column(String)
+    client_name: str = Column(String)
+    description: str = Column(String)
+    location: str = Column(String)
+    work_type: str = Column(String)
+    start_date: datetime = Column(DateTime, default=datetime.utcnow)
+    duration_months: int = Column(Integer)
+    min_budget: int = Column(Integer)
+    max_budget: int = Column(Integer)
     requirements = relationship("ProjectRequirement", back_populates="project")
 
 class Skill(Base):
     __tablename__ = "skills"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String)
-    level = Column(String)
-    engineer_id = Column(Integer, ForeignKey("engineers.id"))
+    id: int = Column(Integer, primary_key=True, index=True)
+    name: str = Column(String)
+    level: str = Column(String)
+    engineer_id: int = Column(Integer, ForeignKey("engineers.id"))
     engineer = relationship("Engineer", back_populates="skills")
 
 class ProjectRequirement(Base):
     __tablename__ = "project_requirements"
-    id = Column(Integer, primary_key=True, index=True)
-    skill = Column(String)
-    level = Column(String)
-    weight = Column(Integer, default=1)
-    project_id = Column(Integer, ForeignKey("projects.id"))
+    id: int = Column(Integer, primary_key=True, index=True)
+    skill: str = Column(String)
+    level: str = Column(String)
+    weight: int = Column(Integer, default=1)
+    project_id: int = Column(Integer, ForeignKey("projects.id"))
     project = relationship("Project", back_populates="requirements")
 
 # テーブル作成
@@ -69,6 +74,38 @@ def get_db():
 
 # FastAPIアプリケーションの作成
 app = FastAPI(title="SESエンジンマッチングAPI")
+
+# アップロードディレクトリの作成
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+# Pydanticモデルの定義
+class SkillBase(BaseModel):
+    name: str
+    level: str
+
+class EngineerBase(BaseModel):
+    name: str
+    email: str
+    current_role: Optional[str] = None
+    location: Optional[str] = None
+    total_experience_years: Optional[float] = None
+
+class ProjectBase(BaseModel):
+    project_name: str
+    client_name: str
+    description: Optional[str] = None
+    location: Optional[str] = None
+    work_type: Optional[str] = None
+    duration_months: Optional[int] = None
+    min_budget: Optional[int] = None
+    max_budget: Optional[int] = None
+
+class ProjectRequirementBase(BaseModel):
+    skill: str
+    level: str
+    weight: int = 1
 
 # CORSミドルウェアの設定
 app.add_middleware(
@@ -278,6 +315,97 @@ def init_db():
         print(f"Error initializing database: {e}")
     finally:
         db.close()
+
+# ファイルアップロード用のエンドポイント
+@app.post("/upload/skillsheet/")
+async def upload_skillsheet(
+    file: UploadFile = File(...),
+    engineer_id: int = Form(...),
+    db: Session = Depends(get_db)
+):
+    """スキルシートをアップロードしてスキルを抽出・保存する"""
+    try:
+        # ファイルを一時的に保存
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        if file_ext not in ['.pdf', '.docx', '.doc']:
+            raise HTTPException(status_code=400, detail="サポートされていないファイル形式です。PDFまたはWord文書をアップロードしてください。")
+        
+        # 一時ファイルに保存
+        temp_dir = tempfile.mkdtemp()
+        file_path = os.path.join(temp_dir, file.filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # ファイルタイプに応じてテキストを抽出
+        text = ""
+        if file_ext == '.pdf':
+            import PyPDF2
+            with open(file_path, 'rb') as f:
+                reader = PyPDF2.PdfReader(f)
+                for page in reader.pages:
+                    text += page.extract_text() or ""
+        elif file_ext in ['.docx', '.doc']:
+            import docx2txt
+            text = docx2txt.process(file_path)
+        
+        # ここでスキルを抽出（簡易的な例）
+        skills = extract_skills_from_text(text)
+        
+        # エンジニアを取得
+        engineer = db.query(Engineer).filter(Engineer.id == engineer_id).first()
+        if not engineer:
+            raise HTTPException(status_code=404, detail="エンジニアが見つかりません")
+        
+        # 既存のスキルを削除
+        db.query(Skill).filter(Skill.engineer_id == engineer_id).delete()
+        
+        # 新しいスキルを追加
+        for skill_name, level in skills.items():
+            skill = Skill(name=skill_name, level=level, engineer_id=engineer_id)
+            db.add(skill)
+        
+        db.commit()
+        
+        return {"message": "スキルシートが正常に処理されました", "skills": skills}
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"スキルシートの処理中にエラーが発生しました: {str(e)}")
+    finally:
+        # 一時ファイルを削除
+        if 'temp_dir' in locals() and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+def extract_skills_from_text(text: str) -> Dict[str, str]:
+    """テキストからスキルを抽出する（簡易的な実装）"""
+    # ここでは簡単のため、特定のキーワードを検出するだけの実装とします
+    # 実際には、より高度な自然言語処理や機械学習を使用することが望ましいです
+    
+    # スキルとレベルのマッピング（簡易的な例）
+    skill_keywords = {
+        'Python': 'advanced',
+        'Java': 'intermediate',
+        'JavaScript': 'intermediate',
+        'SQL': 'advanced',
+        'Docker': 'beginner',
+        'AWS': 'intermediate',
+        'React': 'beginner',
+        'Django': 'intermediate',
+        'FastAPI': 'intermediate',
+        'Git': 'intermediate'
+    }
+    
+    # テキスト内のスキルを検出
+    detected_skills = {}
+    for skill, level in skill_keywords.items():
+        if skill.lower() in text.lower():
+            detected_skills[skill] = level
+    
+    # 最低1つはスキルがあることを確認
+    if not detected_skills:
+        detected_skills = {"不明な技術": "beginner"}
+    
+    return detected_skills
 
 # アプリケーション起動時にデータベースを初期化
 init_db()
