@@ -1,0 +1,275 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+    <div class="bg-white rounded-lg shadow-md p-8">
+        <h1 class="text-2xl font-bold text-gray-800 mb-6">スキルシートをアップロード</h1>
+        
+        <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center mb-8">
+            <div id="dropZone" class="cursor-pointer">
+                <i class="fas fa-cloud-upload-alt text-4xl text-blue-500 mb-4"></i>
+                <p class="text-gray-600 mb-2">スキルシートをドラッグ＆ドロップ</p>
+                <p class="text-sm text-gray-500 mb-4">または</p>
+                <label for="fileInput" class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg cursor-pointer transition">
+                    ファイルを選択
+                </label>
+                <input id="fileInput" type="file" class="hidden" accept=".pdf,.docx,.doc,.txt">
+            </div>
+            <div id="fileInfo" class="mt-4 hidden">
+                <p class="text-gray-700">選択されたファイル: <span id="fileName" class="font-medium"></span></p>
+                <button id="uploadBtn" class="mt-4 bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-6 rounded-lg transition">
+                    <i class="fas fa-upload mr-2"></i>アップロードして解析
+                </button>
+            </div>
+        </div>
+
+        <div id="uploadProgress" class="hidden">
+            <div class="w-full bg-gray-200 rounded-full h-2.5 mb-4">
+                <div id="progressBar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+            </div>
+            <p class="text-center text-gray-600 mb-4">スキルシートを解析中...</p>
+        </div>
+
+        <div id="resultSection" class="hidden">
+            <div class="bg-blue-50 border-l-4 border-blue-500 p-4 mb-6">
+                <div class="flex">
+                    <div class="flex-shrink-0">
+                        <i class="fas fa-check-circle text-blue-500 text-xl"></i>
+                    </div>
+                    <div class="ml-3">
+                        <p class="text-sm text-blue-700">
+                            スキルシートの解析が完了しました！あなたに最適な案件を探しています。
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="skillsExtracted" class="mb-8">
+                <h3 class="text-lg font-medium text-gray-800 mb-4">抽出されたスキル</h3>
+                <div id="skillsList" class="flex flex-wrap gap-2">
+                    <!-- スキルが動的に挿入されます -->
+                </div>
+            </div>
+
+            <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6">
+                <div class="flex">
+                    <div class="flex-shrink-0">
+                        <i class="fas fa-exclamation-triangle text-yellow-400 text-xl"></i>
+                    </div>
+                    <div class="ml-3">
+                        <p class="text-sm text-yellow-700">
+                            スキルを確認し、不足しているスキルがあれば追加してください。
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-6">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-lg font-medium text-gray-800">スキルを追加</h3>
+                    <button id="addSkillBtn" class="text-blue-600 hover:text-blue-800 text-sm">
+                        <i class="fas fa-plus mr-1"></i>スキルを追加
+                    </button>
+                </div>
+                <div id="skillsForm" class="space-y-3">
+                    <!-- スキル入力フィールドが動的に追加されます -->
+                </div>
+            </div>
+
+            <div class="flex justify-end space-x-4">
+                <button id="backToUpload" class="px-4 py-2 border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    戻る
+                </button>
+                <button id="findProjectsBtn" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md">
+                    案件を探す <i class="fas fa-arrow-right ml-2"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    #dropZone {
+        transition: all 0.3s ease;
+    }
+    #dropZone.drag-over {
+        background-color: #f0f9ff;
+        border-color: #3b82f6;
+    }
+    .skill-tag {
+        display: inline-flex;
+        align-items: center;
+        background-color: #e0f2fe;
+        color: #0369a1;
+        padding: 0.25rem 0.75rem;
+        border-radius: 9999px;
+        font-size: 0.875rem;
+    }
+    .skill-tag button {
+        margin-left: 0.5rem;
+        color: #0369a1;
+        opacity: 0.5;
+    }
+    .skill-tag button:hover {
+        opacity: 1;
+    }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileInfo = document.getElementById('fileInfo');
+    const fileName = document.getElementById('fileName');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const uploadProgress = document.getElementById('uploadProgress');
+    const progressBar = document.getElementById('progressBar');
+    const resultSection = document.getElementById('resultSection');
+    const backToUpload = document.getElementById('backToUpload');
+    const findProjectsBtn = document.getElementById('findProjectsBtn');
+    const skillsForm = document.getElementById('skillsForm');
+    const addSkillBtn = document.getElementById('addSkillBtn');
+    const skillsList = document.getElementById('skillsList');
+
+    // ドラッグ&ドロップのイベント
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, preventDefaults, false);
+    });
+
+    function preventDefaults(e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, highlight, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, unhighlight, false);
+    });
+
+    function highlight() {
+        dropZone.classList.add('drag-over');
+    }
+
+    function unhighlight() {
+        dropZone.classList.remove('drag-over');
+    }
+
+    // ファイルがドロップされたとき
+    dropZone.addEventListener('drop', handleDrop, false);
+
+    function handleDrop(e) {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        handleFiles(files);
+    }
+
+    // ファイルが選択されたとき
+    fileInput.addEventListener('change', function() {
+        handleFiles(this.files);
+    });
+
+    function handleFiles(files) {
+        if (files.length > 0) {
+            const file = files[0];
+            fileName.textContent = file.name;
+            fileInfo.classList.remove('hidden');
+        }
+    }
+
+    // アップロードボタンがクリックされたとき
+    uploadBtn.addEventListener('click', function() {
+        if (fileInput.files.length === 0) return;
+        
+        // アップロード中のUIを表示
+        fileInfo.classList.add('hidden');
+        uploadProgress.classList.remove('hidden');
+        
+        // プログレスバーのアニメーション
+        let progress = 0;
+        const interval = setInterval(() => {
+            progress += Math.random() * 10;
+            if (progress > 90) {
+                progress = 90;
+                clearInterval(interval);
+            }
+            progressBar.style.width = `${progress}%`;
+        }, 200);
+        
+        // 実際のアップロード処理（ここではシミュレーション）
+        setTimeout(() => {
+            clearInterval(interval);
+            progressBar.style.width = '100%';
+            
+            // 解析結果を表示
+            setTimeout(() => {
+                uploadProgress.classList.add('hidden');
+                resultSection.classList.remove('hidden');
+                
+                // サンプルスキルを追加（実際にはバックエンドから取得）
+                const sampleSkills = ['Python', 'JavaScript', 'SQL', 'AWS', 'Docker', 'React'];
+                skillsList.innerHTML = '';
+                sampleSkills.forEach(skill => {
+                    const skillTag = document.createElement('span');
+                    skillTag.className = 'skill-tag';
+                    skillTag.innerHTML = `
+                        ${skill}
+                        <button type="button" class="remove-skill">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    `;
+                    skillsList.appendChild(skillTag);
+                });
+                
+                // スキル削除ボタンのイベント
+                document.querySelectorAll('.remove-skill').forEach(button => {
+                    button.addEventListener('click', function() {
+                        this.closest('.skill-tag').remove();
+                    });
+                });
+            }, 500);
+        }, 2000);
+    });
+    
+    // 戻るボタン
+    backToUpload.addEventListener('click', function() {
+        resultSection.classList.add('hidden');
+        fileInfo.classList.remove('hidden');
+        fileInput.value = '';
+        fileName.textContent = '';
+    });
+    
+    // スキルを追加ボタン
+    addSkillBtn.addEventListener('click', function() {
+        const skillField = document.createElement('div');
+        skillField.className = 'flex space-x-2';
+        skillField.innerHTML = `
+            <input type="text" placeholder="スキル名" class="flex-1 p-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+            <select class="p-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                <option value="beginner">初級</option>
+                <option value="intermediate" selected>中級</option>
+                <option value="expert">上級</option>
+            </select>
+            <button type="button" class="remove-skill-btn text-red-500 hover:text-red-700">
+                <i class="fas fa-times"></i>
+            </button>
+        `;
+        
+        skillsForm.appendChild(skillField);
+        
+        // 削除ボタンのイベント
+        skillField.querySelector('.remove-skill-btn').addEventListener('click', function() {
+            skillField.remove();
+        });
+    });
+    
+    // 案件を探すボタン
+    findProjectsBtn.addEventListener('click', function() {
+        // ここでマッチング処理を行い、結果ページに遷移
+        window.location.href = '/projects/matches';
+    });
+});
+</script>
+{% endblock %}

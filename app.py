@@ -1,15 +1,28 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, g
 import sqlite3
 import os
+from datetime import datetime
 
 app = Flask(__name__)
 
 # データベースファイル名
 DB_FILE = 'ses_match.db'
 
+def get_db():
+    if 'db' not in g:
+        g.db = sqlite3.connect(DB_FILE)
+        g.db.row_factory = sqlite3.Row
+    return g.db
+
+@app.teardown_appcontext
+def close_db(e=None):
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
+
 def init_db():
     """データベースを初期化する"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db()
     c = conn.cursor()
     
     # テーブル作成
@@ -96,62 +109,173 @@ def init_db():
         ])
     
     conn.commit()
-    conn.close()
 
 # APIエンドポイント
 @app.route('/')
 def index():
     return jsonify({"message": "SESエンジンマッチングAPIへようこそ！"})
 
-@app.route('/engineers/', methods=['GET'])
-def list_engineers():
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        conn.row_factory = sqlite3.Row
-        c = conn.cursor()
-        
-        engineers = []
-        c.execute('SELECT * FROM engineers')
-        for row in c.fetchall():
-            engineer = dict(row)
-            c2 = conn.cursor()
-            c2.execute('SELECT name, level FROM skills WHERE engineer_id = ?', (engineer['id'],))
-            engineer['skills'] = [dict(skill) for skill in c2.fetchall()]
-            engineers.append(engineer)
-        
-        return jsonify({"status": "success", "data": engineers})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-    finally:
-        conn.close()
+@app.route('/engineers/', methods=['GET', 'POST'])
+def handle_engineers():
+    if request.method == 'GET':
+        try:
+            conn = get_db()
+            c = conn.cursor()
+            
+            engineers = []
+            c.execute('SELECT * FROM engineers')
+            for row in c.fetchall():
+                engineer = dict(row)
+                c2 = conn.cursor()
+                c2.execute('SELECT name, level FROM skills WHERE engineer_id = ?', (engineer['id'],))
+                engineer['skills'] = [dict(skill) for skill in c2.fetchall()]
+                engineers.append(engineer)
+            
+            return jsonify({"status": "success", "data": engineers})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
+    
+    elif request.method == 'POST':
+        try:
+            data = request.get_json()
+            
+            # 必須フィールドのバリデーション
+            required_fields = ['name', 'email', 'skills']
+            for field in required_fields:
+                if field not in data:
+                    return jsonify({"status": "error", "message": f"Missing required field: {field}"}), 400
+            
+            conn = get_db()
+            c = conn.cursor()
+            
+            # エンジナーを登録
+            c.execute('''
+            INSERT INTO engineers (name, email, current_role, location, experience_years)
+            VALUES (?, ?, ?, ?, ?)
+            ''', (
+                data.get('name'),
+                data.get('email'),
+                data.get('current_role'),
+                data.get('location'),
+                data.get('experience_years')
+            ))
+            
+            engineer_id = c.lastrowid
+            
+            # スキルを登録
+            for skill in data['skills']:
+                if 'name' not in skill or 'level' not in skill:
+                    conn.rollback()
+                    return jsonify({"status": "error", "message": "Each skill must have 'name' and 'level'"}), 400
+                
+                c.execute('''
+                INSERT INTO skills (engineer_id, name, level)
+                VALUES (?, ?, ?)
+                ''', (engineer_id, skill['name'], skill['level']))
+            
+            conn.commit()
+            
+            return jsonify({
+                "status": "success",
+                "message": "Engineer added successfully",
+                "engineer_id": engineer_id
+            }), 201
+            
+        except sqlite3.IntegrityError as e:
+            conn.rollback()
+            return jsonify({"status": "error", "message": "Email already exists"}), 400
+        except Exception as e:
+            conn.rollback()
+            return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/projects/', methods=['GET'])
-def list_projects():
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        conn.row_factory = sqlite3.Row
-        c = conn.cursor()
-        
-        projects = []
-        c.execute('SELECT * FROM projects')
-        for row in c.fetchall():
-            project = dict(row)
-            c2 = conn.cursor()
-            c2.execute('SELECT skill, level, weight FROM project_requirements WHERE project_id = ?', (project['id'],))
-            project['requirements'] = [dict(req) for req in c2.fetchall()]
-            projects.append(project)
-        
-        return jsonify({"status": "success", "data": projects})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-    finally:
-        conn.close()
+@app.route('/projects/', methods=['GET', 'POST'])
+def handle_projects():
+    if request.method == 'GET':
+        try:
+            conn = get_db()
+            c = conn.cursor()
+            
+            projects = []
+            c.execute('SELECT * FROM projects')
+            for row in c.fetchall():
+                project = dict(row)
+                c2 = conn.cursor()
+                c2.execute('SELECT skill, level, weight FROM project_requirements WHERE project_id = ?', (project['id'],))
+                project['requirements'] = [dict(req) for req in c2.fetchall()]
+                projects.append(project)
+            
+            return jsonify({"status": "success", "data": projects})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
+    
+    elif request.method == 'POST':
+        try:
+            data = request.get_json()
+            
+            # 必須フィールドのバリデーション
+            required_fields = ['name', 'requirements']
+            for field in required_fields:
+                if field not in data:
+                    return jsonify({"status": "error", "message": f"Missing required field: {field}"}), 400
+            
+            conn = get_db()
+            c = conn.cursor()
+            
+            # プロジェクトを登録
+            c.execute('''
+            INSERT INTO projects (
+                name, client_name, description, location, 
+                work_type, start_date, duration_months, min_budget, max_budget
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                data.get('name'),
+                data.get('client_name'),
+                data.get('description'),
+                data.get('location'),
+                data.get('work_type'),
+                data.get('start_date', datetime.now().strftime('%Y-%m-%d')),
+                data.get('duration_months'),
+                data.get('min_budget'),
+                data.get('max_budget')
+            ))
+            
+            project_id = c.lastrowid
+            
+            # 要件を登録
+            for req in data['requirements']:
+                if 'skill' not in req or 'level' not in req:
+                    conn.rollback()
+                    return jsonify({
+                        "status": "error", 
+                        "message": "Each requirement must have 'skill' and 'level'"
+                    }), 400
+                
+                c.execute('''
+                INSERT INTO project_requirements (project_id, skill, level, weight)
+                VALUES (?, ?, ?, ?)
+                ''', (
+                    project_id, 
+                    req['skill'], 
+                    req['level'], 
+                    req.get('weight', 1)
+                ))
+            
+            conn.commit()
+            
+            return jsonify({
+                "status": "success",
+                "message": "Project added successfully",
+                "project_id": project_id
+            }), 201
+            
+        except Exception as e:
+            conn.rollback()
+            return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/matches/<int:project_id>', methods=['GET'])
 def get_matches(project_id):
     try:
-        conn = sqlite3.connect(DB_FILE)
-        conn.row_factory = sqlite3.Row
+        conn = get_db()
         c = conn.cursor()
         
         # プロジェクトの取得
@@ -216,8 +340,6 @@ def get_matches(project_id):
         })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-    finally:
-        conn.close()
 
 if __name__ == '__main__':
     # データベース初期化

@@ -1,0 +1,278 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <!-- 戻るボタン -->
+    <div class="mb-6">
+        <a href="{{ url_for('projects') }}" class="inline-flex items-center text-blue-600 hover:text-blue-800">
+            <i class="fas fa-arrow-left mr-2"></i> 案件一覧に戻る
+        </a>
+    </div>
+
+    <!-- メインコンテンツ -->
+    <div class="bg-white rounded-lg shadow-md overflow-hidden">
+        <!-- ヘッダー -->
+        <div class="bg-gradient-to-r from-blue-600 to-blue-800 text-white p-6">
+            <div class="flex justify-between items-start">
+                <div>
+                    <span class="inline-block bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded-full mb-2">
+                        マッチ度: 92%
+                    </span>
+                    <h1 class="text-2xl font-bold">ECサイト開発（大手小売企業向け）</h1>
+                    <div class="flex items-center mt-2 text-sm text-blue-100">
+                        <span class="flex items-center mr-4">
+                            <i class="fas fa-building mr-1"></i> 株式会社テックソリューション
+                        </span>
+                        <span class="flex items-center">
+                            <i class="fas fa-map-marker-alt mr-1"></i> 東京・大阪・リモート
+                        </span>
+                    </div>
+                </div>
+                <div class="bg-white text-blue-800 font-bold text-xl px-4 py-2 rounded-lg">
+                    月額80〜100万円
+                </div>
+            </div>
+        </div>
+
+        <div class="p-6">
+            <!-- 基本情報 -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-800 mb-4 pb-2 border-b">案件情報</h2>
+                    <div class="space-y-4">
+                        <div>
+                            <h3 class="text-sm font-medium text-gray-500">業務内容</h3>
+                            <p class="mt-1">大手小売企業向けのECサイトの新規開発。マイクロサービスアーキテクチャを採用し、最新の技術スタックで開発を進めます。</p>
+                        </div>
+                        <div>
+                            <h3 class="text-sm font-medium text-gray-500">必須スキル</h3>
+                            <div class="flex flex-wrap gap-2 mt-2">
+                                <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded">Python</span>
+                                <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded">Django</span>
+                                <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded">React</span>
+                                <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded">AWS</span>
+                                <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded">Docker</span>
+                                <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded">Kubernetes</span>
+                            </div>
+                        </div>
+                        <div>
+                            <h3 class="text-sm font-medium text-gray-500">歓迎スキル</h3>
+                            <div class="flex flex-wrap gap-2 mt-2">
+                                <span class="bg-gray-100 text-gray-800 text-xs font-medium px-2.5 py-0.5 rounded">TypeScript</span>
+                                <span class="bg-gray-100 text-gray-800 text-xs font-medium px-2.5 py-0.5 rounded">GraphQL</span>
+                                <span class="bg-gray-100 text-gray-800 text-xs font-medium px-2.5 py-0.5 rounded">Terraform</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-800 mb-4 pb-2 border-b">詳細情報</h2>
+                    <div class="space-y-4">
+                        <div>
+                            <h3 class="text-sm font-medium text-gray-500">勤務地</h3>
+                            <p class="mt-1">東京都千代田区（リモート可）</p>
+                            <p class="text-sm text-gray-500">※週2〜3日出社（チームミーティングのため）</p>
+                        </div>
+                        <div>
+                            <h3 class="text-sm font-medium text-gray-500">勤務時間</h3>
+                            <p class="mt-1">フレックスタイム制（コアタイム 10:00-15:00）</p>
+                        </div>
+                        <div>
+                            <h3 class="text-sm font-medium text-gray-500">契約形態</h3>
+                            <p class="mt-1">業務委託 or 契約社員（社会保険完備）</p>
+                        </div>
+                        <div>
+                            <h3 class="text-sm font-medium text-gray-500">期間</h3>
+                            <p class="mt-1">2025年7月〜2026年3月（予定）</p>
+                        </div>
+                        <div>
+                            <h3 class="text-sm font-medium text-gray-500">応募期限</h3>
+                            <p class="mt-1">2025年6月30日（金）</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 仕事内容の詳細 -->
+            <div class="mb-8">
+                <h2 class="text-lg font-semibold text-gray-800 mb-4 pb-2 border-b">仕事内容の詳細</h2>
+                <div class="prose max-w-none">
+                    <p>大手小売企業様のECサイトの新規開発プロジェクトにて、バックエンドAPIの設計・開発を担当していただきます。</p>
+                    <ul class="list-disc pl-5 mt-2 space-y-1">
+                        <li>マイクロサービスアーキテクチャに基づいたAPIの設計・実装</li>
+                        <li>AWSを活用したクラウドネイティブなインフラ構築</li>
+                        <li>CI/CDパイプラインの構築と運用</li>
+                        <li>パフォーマンスチューニングとスケーラビリティの確保</li>
+                        <li>チームメンバーとの協業によるコードレビュー</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- 応募条件 -->
+            <div class="mb-8">
+                <h2 class="text-lg font-semibold text-gray-800 mb-4 pb-2 border-b">応募条件</h2>
+                <div class="prose max-w-none">
+                    <p>下記のいずれかの要件を満たす方</p>
+                    <ul class="list-disc pl-5 mt-2 space-y-1">
+                        <li>Pythonでのバックエンド開発経験3年以上</li>
+                        <li>DjangoまたはFlaskでの実務経験2年以上</li>
+                        <li>AWSなどのクラウドサービスでの開発・運用経験</li>
+                        <li>チーム開発の経験（GitHub/GitLab等の使用経験を含む）</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- マッチングスコアの詳細 -->
+            <div class="bg-blue-50 rounded-lg p-6 mb-8">
+                <h2 class="text-lg font-semibold text-gray-800 mb-4">あなたとのマッチングスコア</h2>
+                <div class="space-y-4">
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <span class="text-sm font-medium text-gray-700">スキルマッチ</span>
+                            <span class="text-sm font-medium">95%</span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-2.5">
+                            <div class="bg-green-500 h-2.5 rounded-full" style="width: 95%"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <span class="text-sm font-medium text-gray-700">経験年数</span>
+                            <span class="text-sm font-medium">90%</span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-2.5">
+                            <div class="bg-green-400 h-2.5 rounded-full" style="width: 90%"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <span class="text-sm font-medium text-gray-700">希望勤務地</span>
+                            <span class="text-sm font-medium">85%</span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-2.5">
+                            <div class="bg-yellow-400 h-2.5 rounded-full" style="width: 85%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- アクションボタン -->
+            <div class="flex flex-col sm:flex-row gap-4 mt-10">
+                <button class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition flex items-center justify-center">
+                    <i class="fas fa-paper-plane mr-2"></i> この案件に応募する
+                </button>
+                <button class="flex-1 bg-white border border-blue-600 text-blue-600 hover:bg-blue-50 font-bold py-3 px-6 rounded-lg transition flex items-center justify-center">
+                    <i class="far fa-bookmark mr-2"></i> 気になるに追加
+                </button>
+                <button class="flex-1 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 font-bold py-3 px-6 rounded-lg transition flex items-center justify-center">
+                    <i class="fas fa-share-alt mr-2"></i> 共有する
+                </button>
+            </div>
+
+            <!-- 注意事項 -->
+            <div class="mt-8 p-4 bg-yellow-50 border-l-4 border-yellow-400">
+                <div class="flex">
+                    <div class="flex-shrink-0">
+                        <i class="fas fa-exclamation-triangle text-yellow-400"></i>
+                    </div>
+                    <div class="ml-3">
+                        <p class="text-sm text-yellow-700">
+                            応募の前に必ずご確認ください：<br>
+                            ・応募にはスキルシートの登録が必要です。<br>
+                            ・応募後に担当者から連絡が届きますので、しばらくお待ちください。<br>
+                            ・気になる案件は「気になる」に保存しておくことができます。
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 関連案件 -->
+<div class="max-w-4xl mx-auto mt-12">
+    <h2 class="text-xl font-bold text-gray-800 mb-6">この案件に興味がある方へのおすすめ</h2>
+    <div class="grid md:grid-cols-2 gap-6">
+        <!-- 関連案件カード1 -->
+        <div class="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200 hover:shadow-lg transition">
+            <div class="p-5">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <h3 class="text-lg font-bold text-gray-800 mb-1">ECサイトのリニューアル案件</h3>
+                        <div class="flex items-center text-sm text-gray-500 mb-3">
+                            <span class="flex items-center">
+                                <i class="fas fa-map-marker-alt mr-1"></i> 東京・リモート
+                            </span>
+                            <span class="mx-2">|</span>
+                            <span>月額70〜90万円</span>
+                        </div>
+                    </div>
+                    <div class="bg-blue-100 text-blue-800 text-xs font-semibold px-2 py-0.5 rounded-full">
+                        マッチ度 88%
+                    </div>
+                </div>
+                <p class="text-gray-600 text-sm mb-4 line-clamp-2">既存のECサイトのリニューアルプロジェクト。モダンな技術スタックへの移行を進めています。</p>
+                <div class="flex flex-wrap gap-1 mb-4">
+                    <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">PHP</span>
+                    <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">Laravel</span>
+                    <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">Vue.js</span>
+                </div>
+                <a href="/projects/3" class="text-blue-600 hover:text-blue-800 text-sm font-medium">詳細を見る <i class="fas fa-chevron-right ml-1 text-xs"></i></a>
+            </div>
+        </div>
+        
+        <!-- 関連案件カード2 -->
+        <div class="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200 hover:shadow-lg transition">
+            <div class="p-5">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <h3 class="text-lg font-bold text-gray-800 mb-1">モバイルアプリ開発</h3>
+                        <div class="flex items-center text-sm text-gray-500 mb-3">
+                            <span class="flex items-center">
+                                <i class="fas fa-map-marker-alt mr-1"></i> 大阪・リモート
+                            </span>
+                            <span class="mx-2">|</span>
+                            <span>月額85〜110万円</span>
+                        </div>
+                    </div>
+                    <div class="bg-blue-100 text-blue-800 text-xs font-semibold px-2 py-0.5 rounded-full">
+                        マッチ度 82%
+                    </div>
+                </div>
+                <p class="text-gray-600 text-sm mb-4 line-clamp-2">フィンテック分野のモバイルアプリ開発。バックエンドAPIの開発を担当していただきます。</p>
+                <div class="flex flex-wrap gap-1 mb-4">
+                    <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">Node.js</span>
+                    <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">TypeScript</span>
+                    <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">AWS</span>
+                </div>
+                <a href="/projects/4" class="text-blue-600 hover:text-blue-800 text-sm font-medium">詳細を見る <i class="fas fa-chevron-right ml-1 text-xs"></i></a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.prose {
+    color: #374151;
+    line-height: 1.75;
+}
+
+.prose ul {
+    margin-top: 0.5em;
+    margin-bottom: 0.5em;
+}
+
+.prose li {
+    margin-top: 0.25em;
+    margin-bottom: 0.25em;
+}
+
+.line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+</style>
+{% endblock %}
