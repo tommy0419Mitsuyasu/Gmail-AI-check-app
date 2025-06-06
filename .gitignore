@@ -62,3 +62,6 @@ htmlcov/
 .Trashes
 ehthumbs.db
 Thumbs.db
+# 認証情報
+credentials.json
+token.pickle

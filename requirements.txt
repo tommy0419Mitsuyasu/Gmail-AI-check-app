@@ -1,11 +1,24 @@
 # Core
-fastapi>=0.68.0
-uvicorn>=0.15.0
-python-dotenv>=0.19.0
+Flask==2.3.3
+Flask-CORS==4.0.0
+python-dotenv==1.0.0
+PyPDF2==3.0.1
+docx2txt==0.8
+ruamel.yaml>=0.17.21
+python-multipart==0.0.6
+Werkzeug==2.3.7
 
 # Database
-sqlalchemy>=1.4.0
+SQLAlchemy==1.4.41
+SQLModel==0.0.8
+
+# Gmail API
+google-api-python-client==2.95.0
+google-auth-httplib2==0.1.1
+google-auth-oauthlib==1.0.0
 
 # Utilities
-python-multipart>=0.0.5
-pydantic>=1.8.0
+pydantic==1.10.11
+
+# 依存関係の競合を避けるための制約
+importlib-metadata<5.0.0  # Python 3.14での互換性のため

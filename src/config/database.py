@@ -16,7 +16,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 # データベースファイルのパス
-DATABASE_URL = f"sqlite:///{BASE_DIR}/sql_app.db"
+DATABASE_URL = f"sqlite:///{BASE_DIR}/ses_match.db"
 
 # SQLAlchemyエンジンの作成
 engine = create_engine(
