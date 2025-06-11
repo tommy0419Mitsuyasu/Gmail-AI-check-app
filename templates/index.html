@@ -2,6 +2,27 @@
 
 {% block content %}
 <div class="max-w-6xl mx-auto">
+    <!-- Gmail認証セクション -->
+    <div class="bg-white rounded-lg shadow-md p-8 mb-8 text-center">
+        <h1 class="text-4xl font-bold text-gray-800 mb-4">Gmail連携</h1>
+        <p class="text-xl text-gray-600 mb-6">Gmailと連携して、メールから案件情報を自動取得できます</p>
+        {% if is_authenticated %}
+            <div class="mb-4 p-4 bg-green-100 text-green-800 rounded-lg">
+                <i class="fas fa-check-circle mr-2"></i>Gmailに接続されています
+            </div>
+            <a href="/search" class="inline-block bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition duration-200 mr-4">
+                <i class="fas fa-search mr-2"></i>メールを検索
+            </a>
+        {% else %}
+            <div class="mb-4 p-4 bg-yellow-100 text-yellow-800 rounded-lg">
+                <i class="fas fa-exclamation-triangle mr-2"></i>Gmailに接続されていません
+            </div>
+            <a href="/gmail/auth" class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition duration-200">
+                <i class="fab fa-google mr-2"></i>Gmailで認証
+            </a>
+        {% endif %}
+    </div>
+
     <!-- ヒーローセクション -->
     <div class="bg-white rounded-lg shadow-md p-8 mb-8 text-center">
         <h1 class="text-4xl font-bold text-gray-800 mb-4">最適なSESエンジニアとプロジェクトのマッチング</h1>

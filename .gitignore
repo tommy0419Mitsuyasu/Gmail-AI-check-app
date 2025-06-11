@@ -49,6 +49,17 @@ processed/
 # Test files
 .pytest_cache/
 .coverage
+
+# Google API credentials
+credentials.json
+token.pickle
+*.json
+*.pickle
+
+# Environment specific files
+.env
+.env.*
+!.env.example
 htmlcov/
 
 # Jupyter Notebook

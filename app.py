@@ -1,8 +1,14 @@
+import os
+# 開発環境用の設定（本番環境では削除またはコメントアウト）
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+
 from flask import Flask, jsonify, request, g, send_from_directory, url_for, render_template, redirect, send_file, session, flash
 from werkzeug.utils import secure_filename
 from ruamel import yaml
 from flask_cors import CORS
 import json
+import pickle
+from googleapiclient.discovery import build
 import sqlite3
 import os
 from datetime import datetime, timedelta
@@ -145,7 +151,9 @@ app.teardown_appcontext(close_db)
 # ルートURL
 @app.route('/')
 def index():
-    return render_template('upload.html')
+    # 認証状態を確認
+    is_authenticated = os.path.exists('token.pickle')
+    return render_template('index.html', is_authenticated=is_authenticated)
 
 # アップロードを許可する拡張子
 def allowed_file(filename):
@@ -193,41 +201,117 @@ def upload_file():
     return jsonify({'error': '許可されていないファイル形式です'}), 400
 
 # Gmail検索用のエンドポイント
-@app.route('/api/search_gmail', methods=['POST'])
+@app.route('/search_gmail', methods=['POST'])
 def search_gmail():
+    # リクエストから検索クエリを取得
     data = request.get_json()
     query = data.get('query', '')
-    max_results = data.get('maxResults', 10)
     
-    # ここでGmail APIを使用して検索を実行
-    # サンプルとしてダミーデータを返す
-    dummy_emails = [
-        {
-            "id": "12345",
-            "sender": "recruiter@example.com",
-            "subject": "Pythonエンジニアの求人について",
-            "snippet": "PythonとFlaskの経験を活かせる案件がございます。ぜひご検討ください。",
-            "date": "2025-06-01T10:30:00"
-        },
-        {
-            "id": "12346",
-            "sender": "hr@tech-company.com",
-            "subject": "Webアプリケーション開発の案件情報",
-            "snippet": "JavaScriptとReactを使用したWebアプリケーション開発の案件がございます。",
-            "date": "2025-05-30T14:15:00"
-        }
-    ]
+    if not query:
+        return jsonify({'status': 'error', 'message': '検索クエリが指定されていません'}), 400
     
-    return jsonify({
-        'success': True,
-        'emails': dummy_emails
-    })
+    # Gmailサービスを取得
+    service = get_gmail_service()
+    if not service:
+        return jsonify({'status': 'error', 'message': 'Gmailサービスに接続できません。認証が必要です。'}), 401
+    
+    try:
+        # メッセージを検索
+        results = service.users().messages().list(
+            userId='me',
+            q=query,
+            maxResults=10  # 最大10件のメールを取得
+        ).execute()
+        
+        messages = results.get('messages', [])
+        emails = []
+        
+        # 各メッセージの詳細を取得
+        for msg in messages:
+            message = service.users().messages().get(
+                userId='me',
+                id=msg['id'],
+                format='metadata',
+                metadataHeaders=['From', 'Subject', 'Date']
+            ).execute()
+            
+            # メタデータから必要な情報を抽出
+            headers = {}
+            for header in message.get('payload', {}).get('headers', []):
+                headers[header['name'].lower()] = header['value']
+            
+            email_data = {
+                'id': message['id'],
+                'subject': headers.get('subject', '(件名なし)'),
+                'from': headers.get('from', '送信者不明'),
+                'snippet': message.get('snippet', ''),
+                'date': headers.get('date', '')
+            }
+            emails.append(email_data)
+        
+        return jsonify({
+            'status': 'success',
+            'emails': emails
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Gmail検索中にエラーが発生しました: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'メールの検索中にエラーが発生しました: {str(e)}'
+        }), 500
+
+from google_auth_oauthlib.flow import Flow
+from google.oauth2.credentials import Credentials
 
 # Gmail認証用のエンドポイント
-@app.route('/gmail_auth')
+@app.route('/gmail/auth')
 def gmail_auth():
-    # ここでGmail認証の処理を実装
-    # サンプルとして認証済みとして扱う
+    # OAuth2フローの設定
+    flow = Flow.from_client_secrets_file(
+        'credentials.json',  # ダウンロードしたOAuth2クライアントIDのJSONファイル
+        scopes=['https://www.googleapis.com/auth/gmail.readonly'],
+        redirect_uri=url_for('gmail_auth_callback', _external=True)
+    )
+    
+    # 認証URLを生成してリダイレクト
+    authorization_url, state = flow.authorization_url(
+        access_type='offline',
+        include_granted_scopes='true',
+        prompt='consent'
+    )
+    
+    # セッションに状態を保存
+    session['state'] = state
+    
+    return redirect(authorization_url)
+
+# Gmail認証コールバック用のエンドポイント
+@app.route('/gmail/auth/callback')
+def gmail_auth_callback():
+    state = session.get('state')
+    
+    if not state:
+        return jsonify({'status': 'error', 'message': 'State parameter not found in session'}), 400
+    
+    # フローの再構築
+    flow = Flow.from_client_secrets_file(
+        'credentials.json',
+        scopes=['https://www.googleapis.com/auth/gmail.readonly'],
+        state=state,
+        redirect_uri=url_for('gmail_auth_callback', _external=True)
+    )
+    
+    # 認証コードを取得
+    flow.fetch_token(authorization_response=request.url)
+    
+    # 認証情報を取得
+    credentials = flow.credentials
+    
+    # トークンを保存
+    with open('token.pickle', 'wb') as token:
+        pickle.dump(credentials, token)
+    
     return redirect(url_for('index'))
 
 # Gmail認証状態確認用のエンドポイント
@@ -254,8 +338,9 @@ error_messages = {
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 def get_gmail_service():
-    # ここにGmail APIの認証処理を実装
+    """Gmail APIサービスを取得する"""
     creds = None
+    
     # トークンファイルが存在する場合は読み込む
     if os.path.exists('token.pickle'):
         with open('token.pickle', 'rb') as token:
@@ -277,5 +362,9 @@ if __name__ == '__main__':
     # アップロードフォルダが存在するか確認
     if not os.path.exists(UPLOAD_FOLDER):
         os.makedirs(UPLOAD_FOLDER)
-        
+    
+    # セッション用の秘密鍵を設定
+    app.secret_key = os.urandom(24)
+    
+    # アプリケーションを実行
     app.run(debug=True, port=5000, host='0.0.0.0')
