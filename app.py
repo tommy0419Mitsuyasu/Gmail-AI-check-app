@@ -24,7 +24,6 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 import pickle
 import re
-import PyPDF2
 from typing import List, Dict, Any, Optional
 
 def get_db():
@@ -153,79 +152,33 @@ CORS(app)  # CORSを有効化
 # レスポンスヘッダーにCSPを追加するミドルウェア
 @app.after_request
 def add_security_headers(response):
-    # 開発環境では 'unsafe-inline' と 'unsafe-eval' を許可
-    # 本番環境では、これらの設定を厳格化することを推奨
-    csp_parts = [
-        # デフォルトポリシー（明示的に指定されていないディレクティブのフォールバック）
-        "default-src 'self';",
-        
-        # JavaScriptの読み込み元を制限
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://www.gstatic.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com;",
-        
-        # スタイルシートの読み込み元を制限
-        "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com;",
-        "style-src-elem 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/;",
-        
-        # 画像の読み込み元を制限
-        "img-src 'self' data: https:;",
-        
-        # フォントの読み込み元を制限
-        "font-src 'self' data: https: https://fonts.gstatic.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com;",
-        
-        # 接続先を制限（XHR、WebSocketなど）
-        "connect-src 'self' http://localhost:5000 https://www.googleapis.com https://accounts.google.com https://*.googleapis.com;",
-        
-        # iframeの埋め込み元を制限
-        "frame-src 'self' https://accounts.google.com;",
-        
-        # プラグインの実行を禁止
-        "object-src 'none';",
-        
-        # ベースURIを制限
-        "base-uri 'self';",
-        
-        # フォームの送信先を制限
-        "form-action 'self' http://localhost:5000;",
-        
-        # フレームの埋め込みを制限
-        "frame-ancestors 'self';",
-        
-        # Web Workerの読み込み元を制限
-        "worker-src 'self' blob:;",
-        
-        # メディアファイルの読み込み元を制限
-        "media-src 'self' data: blob:;",
-        
-        # マニフェストファイルの読み込み元を制限
-        "manifest-src 'self';",
-        
-        # インラインスタイルの許可（必要に応じて）
-        "style-src-attr 'unsafe-inline';",
-        
-        # インラインスクリプトのハッシュまたはnonceを強制（後で実装）
-        # "require-trusted-types-for 'script';",
-        
-        # 信頼できるタイプを制限（後で実装）
-        # "trusted-types 'none';",
-        
-        # アップグレード安全なリクエストを強制
-        "upgrade-insecure-requests;"
-    ]
-    
-    csp = ' '.join(csp_parts).replace('\n', ' ').strip()
-    
     # セキュリティヘッダーを設定
-    response.headers['Content-Security-Policy'] = csp
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     
-    # 開発環境でのみ許可するヘッダー
-    if app.debug:
-        response.headers['X-Content-Security-Policy'] = csp  # IE用
-        response.headers['X-WebKit-CSP'] = csp  # 古いWebKit用
+    # CSP ポリシーを定義
+    csp_policy = [
+        "default-src 'self';",
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://www.gstatic.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://www.googletagmanager.com https://www.google-analytics.com https://kit.fontawesome.com https://unpkg.com https://ka-f.fontawesome.com;",
+        "script-src-elem 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://kit.fontawesome.com https://unpkg.com https://cdn.jsdelivr.net;",
+        "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://kit-free.fontawesome.com https://ka-f.fontawesome.com;",
+        "img-src 'self' data: https: http:;",
+        "font-src 'self' data: https: https://fonts.gstatic.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://kit-free.fontawesome.com https://ka-f.fontawesome.com;",
+        "connect-src 'self' http://localhost:5000 https://www.googleapis.com https://accounts.google.com https://*.googleapis.com https://www.google-analytics.com https://ka-f.fontawesome.com;",
+        "frame-src 'self' https://accounts.google.com https://www.google.com;",
+        "object-src 'none';",
+        "base-uri 'self';",
+        "form-action 'self' http://localhost:5000;",
+        "worker-src 'self' https:;",
+        "frame-ancestors 'self';"
+    ]
+    
+    # CSPヘッダーを設定
+    response.headers['Content-Security-Policy'] = ' '.join(csp_policy)
     
     return response
 
@@ -503,9 +456,7 @@ def search_gmail():
     # リクエストから検索クエリを取得
     data = request.get_json()
     query = data.get('query', '')
-    
-    if not query:
-        return jsonify({'status': 'error', 'message': '検索クエリが指定されていません'}), 400
+    max_results = data.get('maxResults', 10)
     
     # Gmailサービスを取得
     service = get_gmail_service()
@@ -513,11 +464,22 @@ def search_gmail():
         return jsonify({'status': 'error', 'message': 'Gmailサービスに接続できません。認証が必要です。'}), 401
     
     try:
+        # 現在の日付と2日前の日付を取得
+        from datetime import datetime, timedelta
+        now = datetime.utcnow()
+        two_days_ago = now - timedelta(days=2)
+        
+        # 日付をRFC 2822形式に変換
+        date_query = f'after:{two_days_ago.strftime("%Y/%m/%d")}'
+        
+        # 検索クエリを構築（sales@artwize.co.jp宛てで、過去2日間、添付ファイルなし）
+        full_query = f'to:sales@artwize.co.jp {date_query} {query} has:nouserlabels -has:attachment'
+        
         # メッセージを検索
         results = service.users().messages().list(
             userId='me',
-            q=query,
-            maxResults=10  # 最大10件のメールを取得
+            q=full_query,
+            maxResults=max_results
         ).execute()
         
         messages = results.get('messages', [])
@@ -525,26 +487,94 @@ def search_gmail():
         
         # 各メッセージの詳細を取得
         for msg in messages:
-            message = service.users().messages().get(
-                userId='me',
-                id=msg['id'],
-                format='metadata',
-                metadataHeaders=['From', 'Subject', 'Date']
-            ).execute()
-            
-            # メタデータから必要な情報を抽出
-            headers = {}
-            for header in message.get('payload', {}).get('headers', []):
-                headers[header['name'].lower()] = header['value']
-            
-            email_data = {
-                'id': message['id'],
-                'subject': headers.get('subject', '(件名なし)'),
-                'from': headers.get('from', '送信者不明'),
-                'snippet': message.get('snippet', ''),
-                'date': headers.get('date', '')
-            }
-            emails.append(email_data)
+            try:
+                message = service.users().messages().get(
+                    userId='me',
+                    id=msg['id'],
+                    format='metadata',
+                    metadataHeaders=['From', 'Subject', 'Date', 'To']
+                ).execute()
+                
+                # メタデータから必要な情報を抽出
+                headers = {}
+                for header in message.get('payload', {}).get('headers', []):
+                    headers[header['name'].lower()] = header['value']
+                
+                # 添付ファイルの有無を確認（より確実な方法）
+                has_attachments = False
+                
+                # 1. メッセージの添付ファイルを直接確認
+                if 'filename' in message.get('payload', {}) and message['payload']['filename']:
+                    has_attachments = True
+                
+                # 2. パーツを再帰的にチェック
+                def check_parts(part):
+                    if not part:
+                        return False
+                        
+                    # 添付ファイルとして扱うMIMEタイプ
+                    attachment_mime_types = {
+                        'application/octet-stream',
+                        'application/pdf',
+                        'application/msword',
+                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                        'application/vnd.ms-excel',
+                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        'application/vnd.ms-powerpoint',
+                        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                        'application/zip',
+                        'application/x-rar-compressed',
+                        'application/x-7z-compressed',
+                        'application/x-tar',
+                        'application/x-gzip'
+                    }
+                    
+                    # ファイル名がある場合、または添付ファイルとして扱うMIMEタイプの場合
+                    if (part.get('filename') and part['filename']) or \
+                       (part.get('mimeType') and part['mimeType'] in attachment_mime_types):
+                        return True
+                        
+                    # ネストされたパーツを確認
+                    for sub_part in part.get('parts', []):
+                        if check_parts(sub_part):
+                            return True
+                            
+                    return False
+                
+                # メッセージの全パーツをチェック
+                if not has_attachments and 'parts' in message.get('payload', {}):
+                    has_attachments = check_parts(message['payload'])
+                
+                # 添付ファイルがある場合はスキップ
+                if has_attachments:
+                    print(f"添付ファイルがあるメールをスキップしました: {message['id']}")
+                    print(f"件名: {headers.get('subject', '(件名なし)')}")
+                    print(f"送信者: {headers.get('from', '送信者不明')}")
+                    print("-" * 50)
+                    continue
+                
+                # 受信日時をフォーマット
+                email_date = headers.get('date', '')
+                try:
+                    from email.utils import parsedate_to_datetime
+                    email_date = parsedate_to_datetime(email_date).strftime('%Y-%m-%d %H:%M:%S')
+                except (TypeError, ValueError):
+                    pass
+                
+                email_data = {
+                    'id': message['id'],
+                    'subject': headers.get('subject', '(件名なし)'),
+                    'from': headers.get('from', '送信者不明'),
+                    'to': headers.get('to', ''),
+                    'snippet': message.get('snippet', ''),
+                    'date': email_date,
+                    'has_attachments': has_attachments
+                }
+                emails.append(email_data)
+                
+            except Exception as e:
+                print(f"メッセージの取得中にエラーが発生しました: {e}")
+                continue
         
         return jsonify({
             'status': 'success',
@@ -623,6 +653,83 @@ def gmail_auth_status():
         'email': credentials.client_id  # 実際には適切なメールアドレスを取得する必要あり
     })
 
+def get_date_days_ago(days):
+    """指定日数前の日付をYYYY/MM/DD形式で返す"""
+    from datetime import datetime, timedelta
+    date = datetime.now() - timedelta(days=days)
+    return date.strftime('%Y/%m/%d')
+
+def search_gmail_emails(service, skills, normalized_skills):
+    """Gmailからメールを検索して案件情報を返す"""
+    try:
+        # 検索クエリを作成
+        query_parts = [f'to:sales@artwize.co.jp', f'after:{get_date_days_ago(2)}']
+        if skills:
+            query_parts.append(f"({' OR '.join(skills)})")
+        
+        query = ' '.join(query_parts)
+        
+        # メールを検索
+        results = service.users().messages().list(
+            userId='me',
+            q=query,
+            maxResults=10
+        ).execute()
+        
+        messages = results.get('messages', [])
+        projects = []
+        
+        for msg in messages:
+            try:
+                # メールの詳細を取得
+                message = service.users().messages().get(
+                    userId='me',
+                    id=msg['id'],
+                    format='metadata',
+                    metadataHeaders=['subject', 'from', 'date']
+                ).execute()
+                
+                # メタデータから必要な情報を抽出
+                headers = {}
+                for header in message.get('payload', {}).get('headers', []):
+                    headers[header['name'].lower()] = header['value']
+                
+                # 受信日時をフォーマット
+                email_date = headers.get('date', '')
+                try:
+                    from email.utils import parsedate_to_datetime
+                    email_date = parsedate_to_datetime(email_date).strftime('%Y-%m-%d %H:%M:%S')
+                except (TypeError, ValueError):
+                    pass
+                
+                # 案件情報を作成
+                project = {
+                    'id': message['id'],
+                    'name': headers.get('subject', '(件名なし)'),
+                    'client_name': headers.get('from', '送信者不明'),
+                    'date': email_date,
+                    'snippet': message.get('snippet', ''),
+                    'source': 'gmail'
+                }
+                
+                # スキルマッチング情報を追加
+                project['matched_skills'] = [s for s in normalized_skills if s.lower() in project['snippet'].lower()]
+                project['match_count'] = len(project['matched_skills'])
+                project['match_score'] = project['match_count']  # 単純にマッチ数を使用
+                project['match_percentage'] = min(project['match_count'] * 20, 100)  # 1スキルあたり20%と仮定
+                
+                projects.append(project)
+                
+            except Exception as e:
+                print(f"メールの処理中にエラーが発生しました: {e}")
+                continue
+        
+        return projects
+        
+    except Exception as e:
+        print(f"Gmail検索中にエラーが発生しました: {e}")
+        raise
+
 # スキルに基づいて案件を検索するAPI
 @app.route('/api/search_projects', methods=['POST'])
 def search_projects():
@@ -635,45 +742,37 @@ def search_projects():
         if not isinstance(skills, list):
             return jsonify({'status': 'error', 'message': '無効なスキル形式です'}), 400
         
-        conn = get_db()
-        c = conn.cursor()
+        # 空のスキルを除外して正規化
+        normalized_skills = [skill.lower().strip() for skill in skills if skill.strip()]
+        if not normalized_skills:
+            return jsonify({'status': 'error', 'message': '有効なスキルが指定されていません'}), 400
         
-        # スキルに基づいて案件を検索
-        query = '''
-        SELECT p.*, 
-               COUNT(DISTINCT pr.skill) as match_count,
-               GROUP_CONCAT(DISTINCT pr.skill) as required_skills_list
-        FROM projects p
-        LEFT JOIN project_requirements pr ON p.id = pr.project_id
-        WHERE pr.skill IN ({})
-        GROUP BY p.id
-        HAVING match_count > 0
-        ORDER BY match_count DESC
-        LIMIT 20
-        '''.format(','.join(['?'] * len(skills)))
+        # Gmail APIからメールを検索
+        service = get_gmail_service()
+        if not service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Gmailサービスに接続できませんでした。認証が必要です。'
+            }), 500
         
-        c.execute(query, skills)
-        projects = [dict(row) for row in c.fetchall()]
+        # Gmailからメールを検索して案件を取得
+        projects = search_gmail_emails(service, skills, normalized_skills)
         
-        # マッチしたスキルをハイライト
-        for project in projects:
-            required_skills = project['required_skills_list'].split(',') if project['required_skills_list'] else []
-            matched_skills = [skill for skill in skills if skill in required_skills]
-            project['matched_skills'] = matched_skills
-            project['match_percentage'] = int((len(matched_skills) / len(required_skills)) * 100) if required_skills else 0
-            
-            # 不要なフィールドを削除
-            if 'required_skills_list' in project:
-                del project['required_skills_list']
+        # マッチスコアでソート（降順）
+        projects.sort(key=lambda x: x['match_score'], reverse=True)
         
         return jsonify({
             'status': 'success',
-            'projects': projects
+            'projects': projects,
+            'total': len(projects)
         })
         
     except Exception as e:
-        print(f'Error searching projects: {str(e)}')
-        return jsonify({'status': 'error', 'message': '案件の検索中にエラーが発生しました'}), 500
+        print(f"プロジェクト検索中にエラーが発生しました: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'プロジェクトの検索中にエラーが発生しました: {str(e)}'
+        }), 500
 
 # スキルを保存するAPIエンドポイント
 @app.route('/api/save_skills', methods=['POST'])
@@ -731,6 +830,412 @@ def save_skills():
             'error': str(e)
         }), 500
 
+def get_recent_sales_emails(service, days=2, max_results=10):
+    """sales@artwize.co.jpに送信された過去指定日数以内のメールを取得する"""
+    query = 'to:sales@artwize.co.jp newer_than:2d'
+    try:
+        results = service.users().messages().list(
+            userId='me',
+            q=query,
+            maxResults=max_results
+        ).execute()
+        return results.get('messages', [])
+    except Exception as e:
+        print(f"Error getting messages: {e}")
+        return []
+
+def extract_email_info(service, msg_id):
+    """メールの詳細情報を取得"""
+    try:
+        message = service.users().messages().get(
+            userId='me',
+            id=msg_id,
+            format='raw'
+        ).execute()
+        
+        msg_str = base64.urlsafe_b64decode(message['raw'].encode('ASCII'))
+        mime_msg = message_from_bytes(msg_str)
+        
+        subject = mime_msg.get('subject', '件名なし')
+        sender = mime_msg.get('from', '差出人不明')
+        date = mime_msg.get('date', '')
+        body = ''
+        
+        # 日付をフォーマット
+        try:
+            if date:
+                date_obj = parsedate_to_datetime(date)
+                date = date_obj.strftime('%Y-%m-%d %H:%M:%S')
+        except:
+            date = '日付不明'
+        
+        # 本文の取得
+        if mime_msg.is_multipart():
+            for part in mime_msg.walk():
+                content_type = part.get_content_type()
+                if content_type == 'text/plain':
+                    body = part.get_payload(decode=True).decode(errors='ignore')
+                    break
+        else:
+            body = mime_msg.get_payload(decode=True).decode(errors='ignore')
+            
+        return {
+            'id': msg_id,
+            'subject': subject,
+            'from': sender,
+            'date': date,
+            'body': body
+        }
+    except Exception as e:
+        print(f"Error extracting email info: {e}")
+        return None
+
+def extract_skills_from_email(body: str) -> List[str]:
+    """メール本文からスキルを抽出"""
+    skill_patterns = [
+        r'(?:スキル|技術|経験|経験者|経験年数)[：:]\s*([^\n\r]+)',
+        r'(?:言語|フレームワーク|ツール)[：:]\s*([^\n\r]+)',
+        r'(?:必須|歓迎)スキル[：:]\s*([^\n\r]+)'
+    ]
+    
+    skills = set()
+    for pattern in skill_patterns:
+        matches = re.findall(pattern, body, re.IGNORECASE)
+        for match in matches:
+            skills.update(re.split(r'[,、・/]', match))
+    
+    return [skill.strip() for skill in skills if skill.strip()]
+
+def find_matching_engineers(required_skills: List[str]) -> List[Dict[str, Any]]:
+    """必要なスキルに基づいてマッチするエンジニアを検索
+    
+    Args:
+        required_skills: 必要なスキルのリスト
+        
+    Returns:
+        マッチしたエンジニアのリスト（完全一致を優先し、スコア順にソート）
+    """
+    if not required_skills:
+        return []
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # 各スキルに対して完全一致と部分一致で検索
+    skill_conditions = []
+    params = []
+    
+    # 各スキルに対して完全一致と部分一致の条件を追加
+    for skill in required_skills:
+        skill_conditions.append("""
+            EXISTS (
+                SELECT 1 FROM skills s 
+                WHERE s.engineer_id = e.id 
+                AND (s.skill = ? OR s.skill LIKE ?)
+            )
+        """)
+        params.extend([skill, f"%{skill}%"])
+    
+    query = f"""
+    SELECT 
+        e.*, 
+        GROUP_CONCAT(DISTINCT s.skill) as skills,
+        COUNT(DISTINCT CASE WHEN s.skill IN ({','.join(['?']*len(required_skills))}) THEN s.skill END) as exact_matches,
+        COUNT(DISTINCT s.skill) as total_matches
+    FROM engineers e
+    JOIN skills s ON e.id = s.engineer_id
+    WHERE {' OR '.join(skill_conditions)}
+    GROUP BY e.id
+    HAVING exact_matches > 0
+    ORDER BY exact_matches DESC, total_matches DESC
+    LIMIT 10
+    """
+    
+    # クエリパラメータを準備（完全一致用のスキルリスト + 各スキルの完全一致/部分一致パラメータ）
+    query_params = required_skills + params
+    cursor.execute(query, query_params)
+    
+    return [dict(row) for row in cursor.fetchall()]
+
+@app.route('/api/emails', methods=['GET'])
+def get_emails():
+    """Gmailからメール一覧を取得する"""
+    if 'credentials' not in session:
+        return jsonify({'error': 'Gmail認証が必要です'}), 401
+    
+    try:
+        credentials = Credentials(**session['credentials'])
+        service = build('gmail', 'v1', credentials=credentials)
+        
+        # 過去7日間のメールを取得
+        emails = get_recent_sales_emails(service, days=7, max_results=50)
+        email_list = []
+        
+        for email in emails:
+            # メールの基本情報のみを取得（本文は取得しない）
+            msg = service.users().messages().get(userId='me', id=email['id'], format='metadata', metadataHeaders=['subject', 'from', 'date']).execute()
+            
+            # メタデータから情報を抽出
+            headers = {h['name'].lower(): h['value'] for h in msg.get('payload', {}).get('headers', [])}
+            
+            email_info = {
+                'id': email['id'],
+                'subject': headers.get('subject', '(件名なし)'),
+                'from': headers.get('from', '差出人不明'),
+                'date': headers.get('date', '日付不明'),
+                'snippet': msg.get('snippet', '')
+            }
+            
+            email_list.append(email_info)
+        
+        return jsonify({
+            'status': 'success',
+            'emails': email_list[:20]  # 最大20件に制限
+        })
+        
+    except Exception as e:
+        print(f'Error in get_emails: {str(e)}')
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/emails/<email_id>', methods=['GET'])
+def get_email_detail(email_id):
+    """特定のメールの詳細を取得する"""
+    if 'credentials' not in session:
+        return jsonify({'error': 'Gmail認証が必要です'}), 401
+    
+    try:
+        credentials = Credentials(**session['credentials'])
+        service = build('gmail', 'v1', credentials=credentials)
+        
+        # メールの詳細を取得
+        email_info = extract_email_info(service, email_id)
+        
+        # メール本文からスキルを抽出
+        required_skills = extract_skills_from_email(email_info['body'])
+        
+        # スキルに基づいてマッチするエンジニアを検索
+        matched_engineers = find_matching_engineers(required_skills) if required_skills else []
+        
+        # スキルに基づいてマッチする案件を検索
+        matched_projects = []
+        if required_skills:
+            # データベースから案件を検索
+            conn = get_db()
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # スキルに基づいて案件を検索
+            placeholders = ','.join(['?'] * len(required_skills))
+            query = f"""
+            SELECT DISTINCT p.*
+            FROM projects p
+            JOIN project_requirements pr ON p.id = pr.project_id
+            WHERE pr.skill IN ({placeholders})
+            GROUP BY p.id
+            ORDER BY COUNT(DISTINCT pr.skill) DESC
+            LIMIT 5
+            """
+            
+            c.execute(query, required_skills)
+            matched_projects = [dict(row) for row in c.fetchall()]
+        
+        return jsonify({
+            'status': 'success',
+            'email': {
+                'subject': email_info['subject'],
+                'from': email_info['from'],
+                'date': email_info['date'],
+                'body': email_info['body']
+            },
+            'extracted_skills': required_skills,
+            'matched_engineers': matched_engineers,
+            'matched_projects': matched_projects
+        })
+        
+    except Exception as e:
+        print(f'Error in get_email_detail: {str(e)}')
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+# 既存のmatch_projects関数はそのまま残す
+@app.route('/api/match_projects', methods=['GET'])
+def match_projects():
+    """スキルに基づいてエンジニアと案件をマッチングする"""
+    if 'credentials' not in session:
+        return jsonify({'error': 'Gmail認証が必要です'}), 401
+    
+    try:
+        credentials = Credentials(**session['credentials'])
+        service = build('gmail', 'v1', credentials=credentials)
+        
+        # 過去2日間のメールを取得
+        emails = get_recent_sales_emails(service, days=2)
+        results = []
+        
+        for email in emails:
+            # メールの詳細を取得
+            email_info = extract_email_info(service, email['id'])
+            
+            # メール本文からスキルを抽出
+            required_skills = extract_skills_from_email(email_info['body'])
+            if not required_skills:
+                continue
+                
+            # スキルに基づいてマッチするエンジニアを検索
+            matched_engineers = find_matching_engineers(required_skills)
+            
+            # 結果に追加
+            results.append({
+                'email_id': email['id'],
+                'email': {
+                    'subject': email_info['subject'],
+                    'from': email_info['from'],
+                    'date': email_info['date'],
+                    'snippet': email_info['body'][:200] + '...' if len(email_info['body']) > 200 else email_info['body']
+                },
+                'required_skills': required_skills,
+                'matched_engineers': matched_engineers
+            })
+        
+        return jsonify({
+            'status': 'success',
+            'matches': results
+        })
+        
+    except Exception as e:
+        print(f'Error in match_projects: {str(e)}')
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+        
+        # 過去2日間のメールを取得
+        emails = get_recent_sales_emails(service, days=2)
+        results = []
+        
+        for email in emails:
+            email_info = extract_email_info(service, email['id'])
+            if not email_info:
+                continue
+                
+            # メールからスキルを抽出
+            required_skills = extract_skills_from_email(email_info['body'])
+            
+            # マッチするエンジニアを検索
+            matched_engineers = find_matching_engineers(required_skills)
+            
+            if matched_engineers:
+                results.append({
+                    'email': email_info,
+                    'required_skills': required_skills,
+                    'matched_engineers': matched_engineers
+                })
+        
+        return jsonify({
+            'status': 'success',
+            'matches': results
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/matches')
+def view_matches():
+    """マッチング結果を表示するページ"""
+    if 'credentials' not in session:
+        return redirect(url_for('gmail_auth'))
+    return render_template('matches.html')
+
+@app.route('/api/projects', methods=['GET'])
+def get_projects_api():
+    """
+    すべてのプロジェクトと必要なスキルを取得する（API用）
+    """
+    conn = None
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # プロジェクトと必要なスキルを取得
+        c.execute('''
+            SELECT p.*, 
+                   GROUP_CONCAT(DISTINCT pr.skill) as required_skill_names
+            FROM projects p
+            LEFT JOIN project_requirements pr ON p.id = pr.project_id
+            GROUP BY p.id
+        ''')
+        
+        projects = []
+        for row in c.fetchall():
+            project = dict(row)
+            # 必要なスキル名がNoneの場合は空の文字列に変換
+            if not project.get('required_skill_names'):
+                project['required_skill_names'] = ''
+            projects.append(project)
+        
+        return jsonify({
+            'status': 'success',
+            'data': projects
+        })
+        
+    except Exception as e:
+        app.logger.error(f'Error fetching projects: {str(e)}')
+        return jsonify({
+            'status': 'error',
+            'message': 'プロジェクトの取得中にエラーが発生しました'
+        }), 500
+        
+    finally:
+        if conn:
+            conn.close()
+
+@app.route('/projects', methods=['GET'])
+def get_projects():
+    """
+    プロジェクト一覧ページを表示する
+    """
+    conn = None
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # プロジェクトと必要なスキルを取得
+        c.execute('''
+            SELECT p.*, 
+                   GROUP_CONCAT(DISTINCT pr.skill) as required_skill_names
+            FROM projects p
+            LEFT JOIN project_requirements pr ON p.id = pr.project_id
+            GROUP BY p.id
+        ''')
+        
+        projects = []
+        for row in c.fetchall():
+            project = dict(row)
+            # 必要なスキル名がNoneの場合は空の文字列に変換
+            if not project.get('required_skill_names'):
+                project['required_skill_names'] = ''
+            projects.append(project)
+        
+        # テンプレートにプロジェクトデータを渡してレンダリング
+        return render_template('projects.html', projects=projects)
+        
+    except Exception as e:
+        app.logger.error(f'Error fetching projects: {str(e)}')
+        # エラーが発生した場合は空のリストを渡してテンプレートをレンダリング
+        return render_template('projects.html', projects=[])
+        
+    finally:
+        if conn:
+            conn.close()
+
 # エラーメッセージ
 error_messages = {
     'no_file': 'ファイルが選択されていません',
@@ -771,8 +1276,9 @@ if __name__ == '__main__':
     if not os.path.exists(UPLOAD_FOLDER):
         os.makedirs(UPLOAD_FOLDER)
     
-    # セッション用の秘密鍵を設定
-    app.secret_key = os.urandom(24)
+    # テンプレートフォルダが存在するか確認
+    if not os.path.exists('templates'):
+        os.makedirs('templates')
     
-    # アプリケーションを実行
+    # 開発用にデバッグモードで起動
     app.run(debug=True, port=5000, host='0.0.0.0')

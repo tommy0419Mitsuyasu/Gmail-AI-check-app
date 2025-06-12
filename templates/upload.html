@@ -7,16 +7,26 @@
         <p class="text-gray-600 mb-6">PDFまたはWord形式のスキルシートをアップロードして、スキルを自動抽出します。</p>
         
         <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center mb-8">
-            <form id="uploadForm" enctype="multipart/form-data" class="mb-4">
-                <div id="dropZone" class="cursor-pointer">
-                    <i class="fas fa-cloud-upload-alt text-4xl text-blue-500 mb-4"></i>
+            <form id="uploadForm" enctype="multipart/form-data" class="mb-4" aria-label="ファイルアップロードフォーム">
+                <div id="dropZone" class="cursor-pointer" role="button" tabindex="0" aria-label="ファイルをドラッグ＆ドロップするエリア">
+                    <i class="fas fa-cloud-upload-alt text-4xl text-blue-500 mb-4" aria-hidden="true"></i>
                     <p class="text-gray-600 mb-2">スキルシートをドラッグ＆ドロップ</p>
                     <p class="text-sm text-gray-500 mb-4">または</p>
                     <label for="fileInput" class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg cursor-pointer transition">
                         ファイルを選択
                     </label>
-                    <input id="fileInput" name="file" type="file" class="hidden" accept=".pdf,.docx,.doc">
-                    <input type="hidden" id="engineerId" name="engineerId" value="1">
+                    <input id="fileInput" 
+                           name="file" 
+                           type="file" 
+                           class="hidden" 
+                           accept=".pdf,.docx,.doc" 
+                           aria-label="スキルシートファイルを選択"
+                           required>
+                    <input type="hidden" 
+                           id="engineerId" 
+                           name="engineerId" 
+                           value="1"
+                           aria-label="エンジニアID">
                 </div>
                 <div id="fileInfo" class="mt-4 hidden">
                     <p class="text-gray-700">選択されたファイル: <span id="fileName" class="font-medium"></span></p>

@@ -140,6 +140,36 @@ async def list_engineers():
     finally:
         conn.close()
 
+@app.get("/projects")
+async def list_projects():
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        
+        projects = []
+        c.execute('''
+            SELECT p.*, 
+                   GROUP_CONCAT(DISTINCT pr.skill_id) as required_skill_ids,
+                   GROUP_CONCAT(DISTINCT s.name) as required_skill_names
+            FROM projects p
+            LEFT JOIN project_requirements pr ON p.id = pr.project_id
+            LEFT JOIN skills s ON pr.skill_id = s.id
+            GROUP BY p.id
+        ''')
+        
+        for row in c.fetchall():
+            project = dict(row)
+            project['required_skill_ids'] = [int(id) for id in (project['required_skill_ids'].split(','))] if project['required_skill_ids'] else []
+            project['required_skill_names'] = project['required_skill_names'].split(',') if project['required_skill_names'] else []
+            projects.append(project)
+        
+        return {"status": "success", "data": projects}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        conn.close()
+
 @app.get("/projects/")
 async def list_projects():
     try:
@@ -234,4 +264,4 @@ async def get_matches(project_id: int):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=True)

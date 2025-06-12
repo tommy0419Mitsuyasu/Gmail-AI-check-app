@@ -1,6 +1,29 @@
 // グローバル変数
 'use strict';
 
+// 動的コード評価を避けるためのヘルパー関数
+const safeEval = (code, context = {}) => {
+  // 許可された関数のみを実行
+  const allowedFunctions = {
+    // 必要な関数をここに追加
+  };
+  
+  try {
+    // コンテキストをセットアップ
+    const sandbox = {
+      ...allowedFunctions,
+      ...context
+    };
+    
+    // 関数を作成して実行
+    const fn = new Function(...Object.keys(sandbox), `return (${code})`);
+    return fn(...Object.values(sandbox));
+  } catch (error) {
+    console.error('Error in safeEval:', error);
+    return null;
+  }
+};
+
 const elements = {
     // ファイルアップロード関連
     dropZone: null,
@@ -66,6 +89,17 @@ function initElements() {
     elements.gmailSearchContainer = document.getElementById('gmailSearchContainer');
     elements.gmailAuthError = document.getElementById('gmailAuthError');
 }
+
+// ページアンロード時の処理を設定
+window.addEventListener('beforeunload', (event) => {
+  // 必要なクリーンアップ処理をここに追加
+  // 例：保存されていない変更がある場合に確認ダイアログを表示
+  // if (hasUnsavedChanges) {
+  //   event.preventDefault();
+  //   event.returnValue = '保存されていない変更があります。このページを離れますか？';
+  //   return '保存されていない変更があります。このページを離れますか？';
+  // }
+});
 
 // ドラッグ＆ドロップ機能の初期化
 function initDragAndDrop() {
@@ -526,27 +560,165 @@ function setupFindProjectsButton() {
 
 // 日付をフォーマットするヘルパー関数
 function formatDate(dateString) {
-    if (!dateString) return '';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('ja-JP', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-    });
+    if (!dateString) return '日付不明';
+    try {
+        const date = new Date(dateString);
+        return date.toLocaleString('ja-JP', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    } catch (e) {
+        console.error('日付のフォーマットに失敗しました:', e);
+        return dateString; // パースできない場合はそのまま返す
+    }
 }
 
-// マッチする案件を検索
-async function searchMatchingProjects(skills) {
-    console.log('searchMatchingProjects を開始します', { skills });
-    
-    if (!skills || skills.length === 0) {
-        const errorMsg = '検索するスキルが指定されていません';
-        console.error(errorMsg);
-        showError('エラー', errorMsg);
+// メール詳細モーダルを表示する関数
+function showEmailDetail(emailId) {
+    // モーダルを表示
+    const modal = document.getElementById('emailModal');
+    if (!modal) {
+        console.error('メールモーダル要素が見つかりません');
         return;
     }
+    
+    modal.classList.remove('hidden');
+    
+    // モーダルの内容をリセット
+    document.getElementById('emailSubject').textContent = '読み込み中...';
+    document.getElementById('emailFrom').textContent = '';
+    document.getElementById('emailDate').textContent = '';
+    document.getElementById('emailBody').textContent = '読み込み中...';
+    document.getElementById('extractedSkills').innerHTML = '<div class="text-gray-500">スキルを抽出中...</div>';
+    document.getElementById('matchedProjects').innerHTML = '<div class="text-gray-500 text-center py-4">マッチする案件を検索中...</div>';
+    
+    // メールの詳細を取得
+    fetch(`/api/emails/${emailId}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('メールの取得に失敗しました');
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.status !== 'success') {
+                throw new Error(data.message || 'エラーが発生しました');
+            }
+            
+            console.log('メール詳細:', data);
+            
+            // メール情報を表示
+            document.getElementById('emailSubject').textContent = data.email.subject || '(件名なし)';
+            document.getElementById('emailFrom').textContent = `差出人: ${data.email.from || '不明'}`;
+            document.getElementById('emailDate').textContent = `受信日時: ${formatDate(data.email.date)}`;
+            document.getElementById('emailBody').textContent = data.email.body || '本文がありません';
+            
+            // 抽出されたスキルを表示
+            const skillsContainer = document.getElementById('extractedSkills');
+            if (data.extracted_skills && data.extracted_skills.length > 0) {
+                skillsContainer.innerHTML = data.extracted_skills.map(skill => 
+                    `<span class="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded">
+                        ${skill}
+                    </span>`
+                ).join('');
+            } else {
+                skillsContainer.innerHTML = '<div class="text-gray-500">スキルが見つかりませんでした</div>';
+            }
+            
+            // マッチする案件を表示
+            const projectsContainer = document.getElementById('matchedProjects');
+            if (data.matched_projects && data.matched_projects.length > 0) {
+                projectsContainer.innerHTML = data.matched_projects.map(project => {
+                    const skills = project.required_skills_list ? 
+                        project.required_skills_list.split(',').map(skill => 
+                            `<span class="inline-block bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded mr-1 mb-1">
+                                ${skill.trim()}
+                            </span>`
+                        ).join('') : '';
+                    
+                    return `
+                        <div class="border rounded-lg p-4 hover:shadow-md transition-shadow">
+                            <div class="flex justify-between items-start mb-2">
+                                <h4 class="font-semibold text-lg">${project.name || '無題の案件'}</h4>
+                                <span class="bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded">
+                                    ${project.work_type || 'その他'}
+                                </span>
+                            </div>
+                            <p class="text-gray-600 text-sm mb-3">${project.description || '説明はありません'}</p>
+                            <div class="flex flex-wrap gap-1 mb-3">
+                                ${skills}
+                            </div>
+                            <div class="flex justify-between items-center text-sm">
+                                <span class="text-gray-500">${project.location || '場所未指定'}</span>
+                                <span class="font-semibold">
+                                    ${project.min_budget ? `¥${Number(project.min_budget).toLocaleString()}〜` : ''}
+                                    ${project.max_budget ? `¥${Number(project.max_budget).toLocaleString()}` : ''}
+                                    ${!project.min_budget && !project.max_budget ? '要相談' : ''}
+                                </span>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } else {
+                projectsContainer.innerHTML = `
+                    <div class="text-center py-6">
+                        <i class="fas fa-inbox text-4xl text-gray-300 mb-2"></i>
+                        <p class="text-gray-500">マッチする案件が見つかりませんでした</p>
+                    </div>
+                `;
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            document.getElementById('emailBody').innerHTML = `
+                <div class="bg-red-50 text-red-700 p-4 rounded">
+                    <p class="font-semibold">エラーが発生しました</p>
+                    <p>${error.message || '詳細情報の取得中に問題が発生しました。後でもう一度お試しください。'}</p>
+                </div>
+            `;
+            document.getElementById('extractedSkills').innerHTML = '';
+            document.getElementById('matchedProjects').innerHTML = '';
+        });
+    
+    // モーダルを閉じるイベントリスナーを追加
+    const closeModal = () => {
+        modal.classList.add('hidden');
+        document.removeEventListener('keydown', handleEscape);
+    };
+    
+    const handleEscape = (e) => {
+        if (e.key === 'Escape') {
+            closeModal();
+        }
+    };
+    
+    // 既存のイベントリスナーを削除してから追加
+    const closeButton = document.getElementById('closeEmailModal');
+    const closeModalBtn = document.getElementById('closeModalBtn');
+    
+    // 古いイベントリスナーを削除
+    closeButton.replaceWith(closeButton.cloneNode(true));
+    closeModalBtn.replaceWith(closeModalBtn.cloneNode(true));
+    
+    // 新しいイベントリスナーを追加
+    document.getElementById('closeEmailModal').onclick = closeModal;
+    document.getElementById('closeModalBtn').onclick = closeModal;
+    document.addEventListener('keydown', handleEscape);
+    
+    // モーダル外をクリックで閉じる
+    modal.onclick = (e) => {
+        if (e.target === modal) {
+            closeModal();
+        }
+    };
+}
+
+// スキルに基づいてマッチング案件を検索する関数
+async function searchMatchingProjects(skills) {
+    console.log('searchMatchingProjects を開始します', { skills });
     
     // ローディング表示
     const resultsContainer = document.getElementById('matchingProjects');
@@ -560,34 +732,88 @@ async function searchMatchingProjects(skills) {
     }
     
     try {
-        console.log('APIリクエストを送信します', { skills });
-        const response = await fetch('/api/search_projects', {
+        console.log('Gmailからメールを検索します', { skills });
+        
+        // 現在の日付と2日前の日付を取得
+        const now = new Date();
+        const twoDaysAgo = new Date(now);
+        twoDaysAgo.setDate(now.getDate() - 2);
+        
+        // 日付をYYYY/MM/DD形式にフォーマット
+        const formatDate = (date) => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}/${month}/${day}`;
+        };
+        
+        const dateQuery = `after:${formatDate(twoDaysAgo)}`;
+        const searchQuery = `to:sales@artwize.co.jp ${dateQuery} ${skills.join(' OR ')}`;
+        
+        console.log('検索クエリ:', searchQuery);
+        
+        // Gmailを検索
+        const response = await fetch('/search_gmail', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ skills: skills })
+            body: JSON.stringify({
+                query: searchQuery,
+                maxResults: 10
+            })
         });
         
         console.log('APIレスポンスを受信しました', { status: response.status });
         
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
-            const errorMsg = errorData.message || '案件の検索中にエラーが発生しました';
+            const errorMsg = errorData.message || 'Gmailの検索中にエラーが発生しました';
             console.error('APIエラー:', { status: response.status, errorData });
             throw new Error(errorMsg);
         }
         
         const data = await response.json();
-        console.log('APIレスポンスデータ:', data);
+        console.log('Gmail検索結果:', data);
         
-        if (data.status === 'success' && data.projects) {
-            console.log('案件を表示します', { count: data.projects.length });
-            displayProjects(data.projects, skills);
+        if (data.status === 'success' && data.emails && data.emails.length > 0) {
+            // メールを案件形式に変換
+            const projects = data.emails.map(email => ({
+                id: email.id,
+                name: email.subject,
+                client_name: email.from,
+                date: email.date,
+                snippet: email.snippet,
+                source: 'gmail',
+                matched_skills: skills.filter(skill => 
+                    email.snippet.toLowerCase().includes(skill.toLowerCase()) ||
+                    email.subject.toLowerCase().includes(skill.toLowerCase())
+                ),
+                match_count: 0, // 後で計算
+                match_percentage: 0 // 後で計算
+            }));
+            
+            // マッチ率を計算
+            projects.forEach(project => {
+                project.match_count = project.matched_skills.length;
+                project.match_percentage = Math.min(project.match_count * 20, 100); // 1スキルあたり最大20%
+            });
+            
+            // マッチ率でソート
+            projects.sort((a, b) => b.match_percentage - a.match_percentage);
+            
+            console.log('案件を表示します', { count: projects.length });
+            displayProjects(projects, skills);
         } else {
-            const errorMsg = data.message || '案件の取得に失敗しました';
-            console.error('データの取得に失敗しました:', { data });
-            throw new Error(errorMsg);
+            console.log('該当するメールは見つかりませんでした');
+            if (resultsContainer) {
+                resultsContainer.innerHTML = `
+                    <div class="text-center py-12">
+                        <i class="fas fa-inbox text-4xl text-gray-300 mb-3"></i>
+                        <p class="text-gray-500">該当する案件が見つかりませんでした</p>
+                        <p class="text-sm text-gray-400 mt-2">検索条件を変更してお試しください</p>
+                    </div>`;
+            }
         }
     } catch (error) {
         console.error('案件検索中にエラーが発生しました:', {
@@ -612,6 +838,43 @@ async function searchMatchingProjects(skills) {
     }
 }
 
+// Gmailを開く関数
+function openGmailWithProject(project) {
+    if (!project) {
+        console.error('プロジェクト情報が無効です');
+        return;
+    }
+    
+    // GmailのメールIDが直接ある場合は、そのメールを開く
+    if (project.id && project.source === 'gmail') {
+        const gmailUrl = `https://mail.google.com/mail/u/0/#inbox/${project.id}`;
+        console.log('Gmailを開きます:', gmailUrl);
+        window.open(gmailUrl, '_blank');
+        return;
+    }
+    
+    // 通常のプロジェクトの場合は、検索クエリを作成
+    let searchQuery = 'to:sales@artwize.co.jp ';
+    
+    if (project.name) {
+        searchQuery += `subject:"${project.name}" `;
+    }
+    
+    if (project.client_name) {
+        searchQuery += `from:"${project.client_name}" `;
+    }
+    
+    if (project.location) {
+        searchQuery += `"${project.location}"`;
+    }
+    
+    // Gmailの検索URLを作成
+    const gmailSearchUrl = `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(searchQuery.trim())}`;
+    
+    console.log('Gmail検索を開きます:', gmailSearchUrl);
+    window.open(gmailSearchUrl, '_blank');
+}
+
 // 案件を表示する関数
 function displayProjects(projects, searchSkills = []) {
     console.log('displayProjects を開始します', { projects, searchSkills });
@@ -622,87 +885,176 @@ function displayProjects(projects, searchSkills = []) {
         return;
     }
     
-    if (!projects || projects.length === 0) {
-        console.log('表示する案件がありません');
-        resultsContainer.innerHTML = `
-            <div class="text-center p-8 text-gray-600">
-                <p>条件に一致する案件が見つかりませんでした。</p>
-                <p class="mt-2">別のスキルでお試しください。</p>
-            </div>`;
-        return;
-    }
-    
-    let html = `
-        <div class="mb-4">
-            <h3 class="text-xl font-semibold text-gray-800">検索結果: ${projects.length}件の案件が見つかりました</h3>
-            <p class="text-sm text-gray-500">スキル: ${searchSkills.join(', ')}</p>
-        </div>
-        <div class="space-y-6">`;
-    
-    projects.forEach(project => {
-        const requiredSkills = project.required_skills ? project.required_skills.split(',').map(s => s.trim()) : [];
-        const matchPercentage = project.match_percentage || 0;
+    // 検索に使用されたスキルを表示
+    const searchSkillsHtml = searchSkills.length > 0 
+        ? `<div class="mb-4">
+              <span class="text-sm text-gray-600">検索スキル: </span>
+              ${searchSkills.map(skill => 
+                  `<span class="inline-block bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded mr-1 mb-1">
+                      ${skill}
+                  </span>`
+              ).join('')}
+          </div>`
+        : '';
         
-        html += `
-            <div class="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200 hover:shadow-lg transition-shadow">
-                <div class="p-6">
-                    <div class="flex justify-between items-start">
-                        <div>
-                            <h4 class="text-lg font-semibold text-gray-900 mb-1">${project.title || 'タイトル未設定'}</h4>
-                            <p class="text-sm text-gray-600 mb-2">${project.company_name || ''} - ${project.location || ''}</p>
+    // プロジェクトカードのテンプレート
+    const projectCardTemplate = (project, index) => {
+        const isGmailProject = project.source === 'gmail';
+        const matchPercentage = project.match_percentage || 0;
+        const matchColor = matchPercentage >= 70 ? 'bg-green-100 text-green-800' : 
+                          matchPercentage >= 40 ? 'bg-yellow-100 text-yellow-800' : 
+                          'bg-red-100 text-red-800';
+        
+        // Gmailのメールかどうかで表示を分岐
+        if (isGmailProject) {
+            return `
+                <div class="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200 hover:shadow-lg transition-shadow mb-6">
+                    <div class="p-6">
+                        <div class="flex justify-between items-start mb-2">
+                            <h3 class="text-lg font-semibold text-gray-900">${project.name || '件名なし'}</h3>
+                            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${matchColor}">
+                                ${matchPercentage}% マッチ
+                            </span>
                         </div>
-                        <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
-                            matchPercentage > 70 ? 'bg-green-100 text-green-800' : 
-                            matchPercentage > 40 ? 'bg-yellow-100 text-yellow-800' : 
-                            'bg-blue-100 text-blue-800'
-                        }">
-                            マッチ度: ${matchPercentage}%
-                        </span>
-                    </div>
-                    
-                    <div class="mt-4">
-                        <p class="text-gray-700 text-sm mb-3 line-clamp-3">${project.description || '説明はありません'}</p>
                         
-                        <div class="mt-3">
-                            <span class="text-sm font-medium text-gray-700">必須スキル:</span>
-                            <div class="flex flex-wrap gap-2 mt-1">
-                                ${requiredSkills.map(skill => {
-                                    const isMatched = searchSkills.some(s => s === skill);
-                                    return `
-                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                            isMatched 
-                                                ? 'bg-blue-100 text-blue-800 border border-blue-300' 
-                                                : 'bg-gray-100 text-gray-800'
-                                        }">
+                        ${project.client_name ? `
+                            <p class="text-gray-600 mb-2">
+                                <i class="fas fa-user-tie mr-2 text-blue-500"></i>
+                                ${project.client_name}
+                            </p>
+                        ` : ''}
+                        
+                        ${project.date ? `
+                            <p class="text-gray-500 text-sm mb-4">
+                                <i class="far fa-calendar-alt mr-2"></i>
+                                ${formatDate(project.date)}
+                            </p>
+                        ` : ''}
+                        
+                        ${project.snippet ? `
+                            <p class="text-gray-700 mb-4 line-clamp-3">${project.snippet}</p>
+                        ` : ''}
+                        
+                        ${project.matched_skills && project.matched_skills.length > 0 ? `
+                            <div class="mb-4">
+                                <p class="text-sm font-medium text-gray-700 mb-2">マッチしたスキル:</p>
+                                <div class="flex flex-wrap gap-2">
+                                    ${project.matched_skills.map(skill => `
+                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                                             ${skill}
-                                            ${isMatched ? ' ✓' : ''}
-                                        </span>`;
-                                }).join('')}
+                                        </span>
+                                    `).join('')}
+                                </div>
                             </div>
-                        </div>
+                        ` : ''}
                         
-                        <div class="mt-4 pt-4 border-t border-gray-100 flex justify-between items-center">
-                            <div class="flex items-center text-sm text-gray-500">
-                                <span class="mr-4">
-                                    <i class="fas fa-yen-sign mr-1"></i>
-                                    ${project.salary_range || '要相談'}
-                                </span>
-                                <span>
-                                    <i class="fas fa-briefcase mr-1"></i>
-                                    ${project.work_style || '勤務形態要確認'}
-                                </span>
-                            </div>
-                            <button class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-                                詳細を見る
+                        <div class="flex justify-end space-x-3 mt-4">
+                            <button onclick="event.stopPropagation(); openGmailWithProject(${JSON.stringify(project).replace(/"/g, '&quot;')})" 
+                                    class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                                <i class="fas fa-envelope mr-2"></i>
+                                Gmailで確認
                             </button>
                         </div>
                     </div>
                 </div>
-            </div>`;
+            `;
+        }
+        
+        // 通常の案件カード
+        const skills = project.required_skills_list 
+            ? project.required_skills_list.split(',').map(skill => 
+                `<span class="inline-block bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded mr-1 mb-1">
+                    ${skill.trim()}
+                </span>`
+            ).join('') 
+            : '';
+            
+        const matchedSkills = project.matched_skills || [];
+        
+        return `
+            <div class="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200 hover:shadow-lg transition-shadow cursor-pointer" 
+                 onclick="event.stopPropagation(); openGmailWithProject(${JSON.stringify(project).replace(/"/g, '&quot;')})">
+                <div class="p-6">
+                    <div class="flex justify-between items-start mb-2">
+                        <h3 class="text-xl font-semibold text-gray-800">${project.name || '無題の案件'}</h3>
+                        <span class="bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded">
+                            ${project.work_type || 'その他'}
+                        </span>
+                    </div>
+                    
+                    <p class="text-gray-600 mb-4">${project.description || '説明はありません'}</p>
+                    
+                    <div class="mb-4">
+                        <h4 class="text-sm font-medium text-gray-700 mb-1">必須スキル:</h4>
+                        <div class="flex flex-wrap">
+                            ${skills || '<span class="text-gray-500 text-sm">スキルが指定されていません</span>'}
+                        </div>
+                    </div>
+                    
+                    ${matchedSkills.length > 0 ? `
+                        <div class="mb-4">
+                            <h4 class="text-sm font-medium text-green-700 mb-1">マッチしたスキル (${matchedSkills.length}件):</h4>
+                            <div class="flex flex-wrap">
+                                ${matchedSkills.map(skill => 
+                                    `<span class="inline-block bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded mr-1 mb-1">
+                                        ${skill}
+                                    </span>`
+                                ).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <div class="flex justify-between items-center text-sm mt-4 pt-4 border-t border-gray-100">
+                        <div>
+                            <span class="text-gray-500">${project.location || '場所未指定'}</span>
+                            <span class="mx-2 text-gray-300">|</span>
+                            <span class="font-semibold">
+                                ${project.min_budget ? `¥${Number(project.min_budget).toLocaleString()}〜` : ''}
+                                ${project.max_budget ? `¥${Number(project.max_budget).toLocaleString()}` : ''}
+                                ${!project.min_budget && !project.max_budget ? '要相談' : ''}
+                            </span>
+                        </div>
+                        
+                        <button class="gmail-button inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md" 
+                                onclick="event.stopPropagation(); openGmailWithProject(${JSON.stringify(project).replace(/"/g, '&quot;')});">
+                            Gmailで問い合わせる
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    };
+    
+    if (!projects || projects.length === 0) {
+        console.log('表示する案件がありません');
+        resultsContainer.innerHTML = `
+            <div class="text-center py-12">
+                <i class="fas fa-inbox text-4xl text-gray-300 mb-3"></i>
+                <p class="text-gray-500">マッチする案件が見つかりませんでした</p>
+                <p class="text-sm text-gray-400 mt-2">検索条件を変更してお試しください</p>
+            </div>
+        `;
+        return;
+    }
+    
+    // 検索スキルを表示
+    if (searchSkillsHtml) {
+        resultsContainer.innerHTML = searchSkillsHtml;
+    } else {
+        resultsContainer.innerHTML = '';
+    }
+    
+    // プロジェクトカードを追加
+    const projectsGrid = document.createElement('div');
+    projectsGrid.className = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6';
+    
+    projects.forEach((project, index) => {
+        const projectCard = document.createElement('div');
+        projectCard.innerHTML = projectCardTemplate(project, index);
+        projectsGrid.appendChild(projectCard.firstElementChild);
     });
     
-    html += '</div>'; // Close space-y-6
-    resultsContainer.innerHTML = html;
+    resultsContainer.appendChild(projectsGrid);
     
     // 検索結果セクションを表示してスクロール
     const resultsSection = document.getElementById('matchingProjectsSection');
@@ -712,7 +1064,7 @@ function displayProjects(projects, searchSkills = []) {
     }
 }
 
-// Gmailでマッチする案件を検索
+// Gmailでマッチする案件を検索し、最初のメールに直接遷移
 async function searchMatchingProjectsInGmail(skills) {
     if (!Array.isArray(skills) || skills.length === 0) {
         console.warn('スキルデータが不正または空です。');
@@ -720,168 +1072,51 @@ async function searchMatchingProjectsInGmail(skills) {
     }
     
     // 検索クエリを作成
-    const searchQuery = skills.map(skill => `(${skill})`).join(' OR ');
-    
-    if (elements.gmailLoading) elements.gmailLoading.classList.remove('hidden');
-    if (elements.gmailError) elements.gmailError.classList.add('hidden');
+    const searchQuery = `to:sales@artwize.co.jp ${skills.map(skill => `(${skill})`).join(' OR ')}`;
     
     try {
-        const response = await fetch('/search_gmail', {
+        // メールを検索
+        const searchResponse = await fetch('/search_gmail', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
                 query: searchQuery,
-                maxResults: 10
+                maxResults: 1 // 最初の1件のみ取得
             })
         });
         
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.message || 'メールの取得中にエラーが発生しました');
+        if (!searchResponse.ok) {
+            const errorData = await searchResponse.json().catch(() => ({}));
+            throw new Error(errorData.message || 'メールの検索中にエラーが発生しました');
         }
         
-        const data = await response.json();
+        const data = await searchResponse.json();
         const emails = Array.isArray(data.messages) ? data.messages : [];
         
-        if (elements.gmailResultsSection) elements.gmailResultsSection.classList.remove('hidden');
-        
-        if (emails.length === 0) {
-            if (elements.gmailResultsBody) {
-                elements.gmailResultsBody.innerHTML = `
-                    <div class="text-center py-8 text-gray-500">
-                        <i class="fas fa-inbox text-4xl mb-2 text-gray-300"></i>
-                        <p>該当するメールが見つかりませんでした。</p>
-                    </div>`;
-            }
-            return;
-        }
-        
-        // メール一覧を表示
-        if (elements.gmailResultsBody) {
-            const emailItems = emails.map(email => {
-                const emailId = email.id || '';
-                const emailSender = email.sender || '送信者不明';
-                const emailSubject = email.subject || '(件名なし)';
-                const emailSnippet = email.snippet || '';
-                const emailDate = formatDate(email.date);
-                
-                return `
-                    <div class="email-item p-4 border-b border-gray-200 hover:bg-gray-50 cursor-pointer" 
-                         onclick="viewEmail('${emailId}')">
-                        <div class="flex justify-between items-start">
-                            <div class="flex-1 min-w-0">
-                                <p class="text-sm font-medium text-gray-900 truncate">
-                                    ${emailSender}
-                                </p>
-                                <p class="text-sm font-medium text-gray-700 truncate">
-                                    ${emailSubject}
-                                </p>
-                                <p class="text-sm text-gray-500 truncate">
-                                    ${emailSnippet}
-                                </p>
-                                <p class="text-xs text-gray-400 mt-1">
-                                    ${emailDate}
-                                </p>
-                            </div>
-                            <div class="ml-4 flex-shrink-0">
-                                <i class="fas fa-chevron-right text-gray-400"></i>
-                            </div>
-                        </div>
-                    </div>`;
-            }).join('');
-            
-            elements.gmailResultsBody.innerHTML = emailItems;
-            
-            // 結果セクションまでスクロール
-            if (elements.gmailResultsSection) {
-                elements.gmailResultsSection.scrollIntoView({ behavior: 'smooth' });
+        if (emails.length > 0) {
+            // 最初のメールを表示
+            const emailId = emails[0].id;
+            if (emailId) {
+                // Gmailのメール詳細ページに直接遷移
+                window.open(`https://mail.google.com/mail/u/0/#inbox/${emailId}`, '_blank');
+                return;
             }
         }
+        
+        // メールが見つからない場合はエラーメッセージを表示
+        showError('情報', '該当するメールが見つかりませんでした', 'Gmailで直接検索しますか？', () => {
+            // Gmailの検索画面を開く
+            window.open(`https://mail.google.com/mail/u/0/#search/${encodeURIComponent(searchQuery)}`, '_blank');
+        });
+        
     } catch (error) {
         console.error('Error searching Gmail:', error);
-        showError('エラー', 'Gmailの検索中にエラーが発生しました', error.message);
-    } finally {
-        if (elements.gmailLoading) elements.gmailLoading.classList.add('hidden');
+        // エラーが発生した場合はGmailの検索画面を開く
+        window.open(`https://mail.google.com/mail/u/0/#search/${encodeURIComponent(searchQuery)}`, '_blank');
     }
-    
-    // 日付をフォーマット
-    function formatDate(dateString) {
-        if (!dateString) return '';
-        
-        try {
-            const date = new Date(dateString);
-            return new Intl.DateTimeFormat('ja-JP', {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit'
-            }).format(date);
-        } catch (e) {
-            return dateString;
-        }
-    }
-    
-    // 戻るボタン（Gmail結果からスキル一覧に戻る）のイベントリスナーを設定
-    function setupBackToSkillsButton() {
-        if (elements.backToSkillsBtn) {
-            elements.backToSkillsBtn.addEventListener('click', function() {
-                if (elements.gmailResultsSection) elements.gmailResultsSection.classList.add('hidden');
-                if (elements.resultSection) elements.resultSection.classList.remove('hidden');
-            });
-        }
-    }
-    
-    // Gmail認証ボタンのイベントリスナーを設定
-    function setupGmailAuthButton() {
-        if (elements.gmailAuthBtn) {
-            elements.gmailAuthBtn.addEventListener('click', function() {
-                // Gmail認証フローを開始
-                window.location.href = '/gmail_auth';
-            });
-        }
-    }
-    
-    // Gmail認証状態を確認
-    async function checkGmailAuthStatus() {
-        try {
-            const response = await fetch('/gmail_auth/status');
-            const data = await response.json();
-            
-            if (data.authenticated) {
-                // 認証済み
-                if (elements.gmailAuthStatus) {
-                    elements.gmailAuthStatus.textContent = '認証済み';
-                    elements.gmailAuthStatus.className = 'text-green-600 font-medium';
-                }
-                if (elements.gmailAuthContainer) elements.gmailAuthContainer.classList.add('hidden');
-                if (elements.gmailSearchContainer) elements.gmailSearchContainer.classList.remove('hidden');
-                if (elements.gmailAuthError) elements.gmailAuthError.classList.add('hidden');
-            } else {
-                // 未認証
-                if (elements.gmailAuthStatus) {
-                    elements.gmailAuthStatus.textContent = '未認証';
-                    elements.gmailAuthStatus.className = 'text-red-600 font-medium';
-                }
-                if (elements.gmailAuthContainer) elements.gmailAuthContainer.classList.remove('hidden');
-                if (elements.gmailSearchContainer) elements.gmailSearchContainer.classList.add('hidden');
-                
-                if (data.error && elements.gmailAuthError) {
-                    elements.gmailAuthError.textContent = data.error;
-                    elements.gmailAuthError.classList.remove('hidden');
-                }
-            }
-        } catch (error) {
-            console.error('認証状態の確認中にエラーが発生しました:', error);
-            if (elements.gmailAuthError) {
-                elements.gmailAuthError.textContent = '認証状態の確認中にエラーが発生しました';
-                elements.gmailAuthError.classList.remove('hidden');
-            }
-        }
-    }
-};
+}
 
 // グローバル関数: メールを表示（新しいタブでGmailを開く）
 function viewEmail(emailId) {
@@ -1044,6 +1279,20 @@ function initializeApp() {
         checkGmailAuthStatus();
     }
 }
+
+// メール詳細ボタンのクリックイベントを委譲
+document.addEventListener('click', function(event) {
+    // 詳細ボタンまたはその子要素がクリックされたか確認
+    const detailButton = event.target.closest('.view-detail-button, .view-detail-button *');
+    if (!detailButton) return;  // 詳細ボタンでない場合は処理をスキップ
+    if (detailButton) {
+        event.preventDefault();
+        const emailId = detailButton.closest('[data-email-id]')?.dataset.emailId;
+        if (emailId) {
+            showEmailDetail(emailId);
+        }
+    }
+});
 
 // DOMの読み込みが完了したら初期化を実行
 document.addEventListener('DOMContentLoaded', initializeApp);
