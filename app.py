@@ -235,12 +235,13 @@ def add_security_headers(response):
     # Content Security Policy (CSP) の設定
     csp_policy = """
         default-src 'self';
-        script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com;
-        style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com;
+        script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com;
+        style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com https://cdnjs.cloudflare.com;
         img-src 'self' data: https: http:;
-        font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net;
-        connect-src 'self' http://localhost:5000;
+        font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com;
+        connect-src 'self' http://localhost:5000 https://api.gmail.com https://www.googleapis.com;
         frame-ancestors 'self';
+        frame-src 'self' https://accounts.google.com;
     """.replace('\n', ' ').replace('  ', '').strip()
     
     response.headers['Content-Security-Policy'] = csp_policy
@@ -340,84 +341,271 @@ def extract_text_from_docx(file_path: str) -> str:
     except Exception as e:
         raise Exception(f'Word文書の処理中にエラーが発生しました: {str(e)}')
 
-def extract_skills(text: str) -> Dict[str, List[str]]:
-    """テキストからスキルを抽出する"""
-    text_lower = text.lower()
-    found_skills = {
-        'programming_languages': [],
-        'frameworks': [],
-        'cloud_services': [],
-        'databases': [],
-        'other_skills': []
-    }
+from skill_extractor import SkillExtractor
+
+def analyze_resume(text: str) -> Dict[str, Any]:
+    """
+    レジュメを分析してスキルを抽出する
     
-    # スキルのカテゴリ分け
-    skill_categories = {
-        'programming_languages': ['python', 'javascript', 'java', 'c#', 'c++', 'ruby', 'php', 'go', 'swift', 'kotlin'],
-        'frameworks': ['django', 'flask', 'fastapi', 'react', 'vue', 'angular', 'node.js', 'spring', 'laravel'],
-        'cloud_services': ['aws', 'amazon web services', 'azure', 'gcp', 'google cloud', 'docker', 'kubernetes', 'terraform', 'ansible'],
-        'databases': ['mysql', 'postgresql', 'mongodb', 'redis', 'elasticsearch', 'oracle', 'sql server']
-    }
+    Args:
+        text: レジュメのテキスト
+        
+    Returns:
+        分析結果の辞書
+        {
+            'skills': {
+                'カテゴリ名': [
+                    {
+                        'name': 'スキル名',
+                        'importance': 0.0-1.0の重要度スコア,
+                        'experience': 経験年数（あれば）,
+                        'context': 'スキルが検出された文脈',
+                        'categories': ['関連カテゴリ1', '関連カテゴリ2'],
+                        'related_skills': ['関連スキル1', '関連スキル2']
+                    },
+                    ...
+                ],
+                ...
+            },
+            'summary': {
+                'total_skills': 総スキル数,
+                'categories': カテゴリ数,
+                'top_skills': [
+                    {'name': 'スキル名', 'importance': 重要度},
+                    ...
+                ]
+            },
+            'status': 'success|error',
+            'error': 'エラーメッセージ（エラー時のみ）'
+        }
+    """
+    if not text:
+        return {
+            "status": "error",
+            "error": "テキストが空です"
+        }
     
-    # スキルを抽出してカテゴリ分け
-    for skill in SKILL_KEYWORDS:
-        skill_lower = skill.lower()
-        if re.search(r'\b' + re.escape(skill_lower) + r'\b', text_lower):
-            added = False
-            for category, keywords in skill_categories.items():
-                if any(keyword in skill_lower for keyword in keywords):
-                    found_skills[category].append(skill)
-                    added = True
-                    break
-            if not added:
-                found_skills['other_skills'].append(skill)
+    try:
+        # スキル抽出
+        skills = extract_skills(text)
+        
+        # サマリー情報を生成
+        total_skills = sum(len(skills[cat]) for cat in skills)
+        category_count = len(skills)
+        
+        # トップスキルを抽出（重要度順に最大5つ）
+        all_skills = []
+        for category, skill_list in skills.items():
+            for skill in skill_list:
+                all_skills.append({
+                    'name': skill['name'],
+                    'importance': skill.get('importance', 0),
+                    'category': category
+                })
+        
+        # 重要度でソート
+        top_skills = sorted(all_skills, key=lambda x: x['importance'], reverse=True)[:5]
+        
+        return {
+            "skills": skills,
+            "summary": {
+                "total_skills": total_skills,
+                "categories": category_count,
+                "top_skills": top_skills
+            },
+            "status": "success"
+        }
+        
+    except Exception as e:
+        error_msg = f"レジュメ分析中にエラーが発生しました: {str(e)}"
+        print(error_msg)
+        return {
+            "status": "error",
+            "error": error_msg
+        }
+
+def extract_skills(text: str) -> Dict[str, List[Dict]]:
+    """
+    テキストからスキルを抽出する
     
-    return found_skills
+    Args:
+        text: 抽出対象のテキスト
+        
+    Returns:
+        カテゴリ別のスキル情報を含む辞書
+        {
+            'カテゴリ名': [
+                {
+                    'name': 'スキル名',
+                    'importance': 0.0-1.0の重要度スコア,
+                    'experience': 経験年数（あれば）,
+                    'context': 'スキルが検出された文脈',
+                    'categories': ['関連カテゴリ1', '関連カテゴリ2'],
+                    'related_skills': ['関連スキル1', '関連スキル2']
+                },
+                ...
+            ],
+            ...
+            'その他': []
+        }
+    """
+    print("\n=== スキル抽出を開始します ===")
+    print(f"入力テキスト長: {len(text)}文字")
+    
+    if not text:
+        print("エラー: テキストが空です")
+        return {}
+    
+    # スキル抽出モジュールの初期化
+    print("スキル抽出モジュールを初期化中...")
+    extractor = SkillExtractor()
+    
+    try:
+        # スキル抽出を実行
+        print("スキル抽出を実行中...")
+        skills = extractor.extract_skills(text)
+        
+        if not skills:
+            print("警告: 抽出されたスキルがありません")
+            return {}
+            
+        print(f"抽出されたスキルカテゴリ数: {len(skills)}")
+        
+        # 結果をフォーマット
+        print("スキル情報をフォーマット中...")
+        formatted_skills = {}
+        for category, skill_list in skills.items():
+            print(f"カテゴリ '{category}': {len(skill_list)}スキル")
+            formatted_skills[category] = []
+            
+            for skill in skill_list:
+                try:
+                    formatted_skill = {
+                        'name': skill.get('name', skill.get('skill', '不明なスキル')),  # 両方のキーを確認
+                        'importance': float(skill.get('importance', 0.5)),
+                        'experience': skill.get('experience', skill.get('experience_years')),  # 両方のキーを確認
+                        'context': skill.get('context', ''),
+                        'categories': skill.get('categories', []),
+                        'related_skills': skill.get('related_skills', [])
+                    }
+                    formatted_skills[category].append(formatted_skill)
+                    print(f"  - スキル: {formatted_skill['name']}, 重要度: {formatted_skill['importance']}")
+                except Exception as e:
+                    print(f"スキルのフォーマット中にエラーが発生しました: {str(e)}")
+                    print(f"問題のスキルデータ: {skill}")
+        
+        # 結果のサマリーを表示
+        total_skills = sum(len(skills) for skills in formatted_skills.values())
+        print(f"\n=== スキル抽出完了 ===")
+        print(f"合計スキル数: {total_skills}")
+        for category, skills in formatted_skills.items():
+            print(f"{category}: {len(skills)}スキル")
+        
+        return formatted_skills
+        
+    except Exception as e:
+        import traceback
+        error_msg = f"スキル抽出中にエラーが発生しました: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        return {}   
 
 def analyze_resume(file_path: str) -> Dict:
     """スキルシートを解析してスキルを抽出する"""
+    print("\n=== レジュメ解析を開始します ===")
+    print(f"解析対象ファイル: {file_path}")
+    
     file_extension = Path(file_path).suffix.lower()
+    print(f"ファイル拡張子: {file_extension}")
     
     try:
         # ファイルの存在確認
         if not os.path.exists(file_path):
-            return {'status': 'error', 'message': 'ファイルが見つかりません'}
-            
+            error_msg = f"エラー: ファイルが見つかりません: {file_path}"
+            print(error_msg)
+            return {'status': 'error', 'message': error_msg}
+        
         # ファイルサイズの確認（10MB以下）
-        if os.path.getsize(file_path) > 10 * 1024 * 1024:  # 10MB
-            return {'status': 'error', 'message': 'ファイルサイズが大きすぎます（10MBまで）'}
+        file_size = os.path.getsize(file_path)
+        print(f"ファイルサイズ: {file_size} バイト")
+        
+        if file_size > 10 * 1024 * 1024:  # 10MB
+            error_msg = f"エラー: ファイルサイズが大きすぎます（{file_size/1024/1024:.2f}MB > 10MB）"
+            print(error_msg)
+            return {'status': 'error', 'message': error_msg}
         
         # ファイルの種類に応じてテキスト抽出
         text = ""
         try:
+            print(f"ファイルからテキストを抽出中...")
             if file_extension == '.pdf':
+                print("PDFファイルを処理中...")
                 text = extract_text_from_pdf(file_path)
             elif file_extension in ['.docx', '.doc']:
+                print("Wordファイルを処理中...")
                 text = extract_text_from_docx(file_path)
             else:
-                return {'status': 'error', 'message': 'サポートされていないファイル形式です'}
-                
+                error_msg = f"エラー: サポートされていないファイル形式です: {file_extension}"
+                print(error_msg)
+                return {'status': 'error', 'message': error_msg}
+            
             # テキストが空でないか確認
             if not text or not text.strip():
-                return {'status': 'error', 'message': 'ファイルからテキストを抽出できませんでした'}
+                error_msg = "エラー: ファイルからテキストを抽出できませんでした"
+                print(error_msg)
+                return {'status': 'error', 'message': error_msg}
+                
+            print(f"抽出されたテキストの長さ: {len(text)} 文字")
+            print("抽出されたテキストの先頭100文字:", text[:100] + ("..." if len(text) > 100 else ""))
                 
         except Exception as e:
+            import traceback
+            error_msg = f"ファイルの解析中にエラーが発生しました: {str(e)}\n{traceback.format_exc()}"
+            print(error_msg)
             return {'status': 'error', 'message': f'ファイルの解析中にエラーが発生しました: {str(e)}'}
         
         # スキル抽出
         try:
+            print("\nスキル抽出を開始します...")
             skills = extract_skills(text)
-            return {
+            
+            if not skills:
+                print("警告: スキルが1つも抽出されませんでした")
+                return {
+                    'status': 'success',
+                    'file_type': file_extension,
+                    'text_length': len(text),
+                    'skills': {},
+                    'extracted_text': text[:1000] + ('...' if len(text) > 1000 else '')
+                }
+            
+            # 抽出されたスキルの統計情報を表示
+            total_skills = sum(len(skills) for skills in skills.values())
+            print(f"\n=== スキル抽出完了 ===")
+            print(f"合計スキル数: {total_skills}")
+            for category, skill_list in skills.items():
+                print(f"{category}: {len(skill_list)}スキル")
+            
+            result = {
                 'status': 'success',
                 'file_type': file_extension,
                 'text_length': len(text),
                 'skills': skills,
                 'extracted_text': text[:1000] + ('...' if len(text) > 1000 else '')  # プレビュー用に最初の1000文字を返す
             }
+            
+            return result
+            
         except Exception as e:
+            import traceback
+            error_msg = f"スキル抽出中にエラーが発生しました: {str(e)}\n{traceback.format_exc()}"
+            print(error_msg)
             return {'status': 'error', 'message': f'スキル抽出中にエラーが発生しました: {str(e)}'}
             
     except Exception as e:
+        import traceback
+        error_msg = f"レジュメ解析中に予期せぬエラーが発生しました: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        return {'status': 'error', 'message': f'レジュメ解析中にエラーが発生しました: {str(e)}'}
         return {'status': 'error', 'message': f'予期せぬエラーが発生しました: {str(e)}'}
 
 # データベース初期化
@@ -431,30 +619,46 @@ app.teardown_appcontext(close_db)
 # ルートURL
 @app.route('/')
 def index():
-    # 認証状態を確認
+    # セッションから認証状態を確認
     is_authenticated = False
-    token_path = 'token.pickle'
-    if os.path.exists(token_path):
+    
+    if 'credentials' in session:
         try:
-            with open(token_path, 'rb') as token:
-                creds = pickle.load(token)
-                # トークンの有効期限を確認
-                if creds and creds.valid:
+            creds_info = session['credentials']
+            creds = Credentials(
+                token=creds_info['token'],
+                refresh_token=creds_info.get('refresh_token'),
+                token_uri=creds_info['token_uri'],
+                client_id=creds_info['client_id'],
+                client_secret=creds_info['client_secret'],
+                scopes=creds_info['scopes']
+            )
+            
+            # トークンの有効期限を確認
+            if creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(Request())
+                    # 新しいトークンでセッションを更新
+                    session['credentials'] = {
+                        'token': creds.token,
+                        'refresh_token': creds.refresh_token,
+                        'token_uri': creds.token_uri,
+                        'client_id': creds.client_id,
+                        'client_secret': creds.client_secret,
+                        'scopes': creds.scopes,
+                        'expiry': creds.expiry.isoformat() if creds.expiry else None
+                    }
+                    session.modified = True
                     is_authenticated = True
-                elif creds and creds.expired and creds.refresh_token:
-                    try:
-                        creds.refresh(Request())
-                        with open(token_path, 'wb') as token:
-                            pickle.dump(creds, token)
-                        is_authenticated = True
-                    except Exception as refresh_error:
-                        app.logger.error(f"トークンの更新に失敗しました: {refresh_error}")
-                        os.unlink(token_path)
+                except Exception as refresh_error:
+                    app.logger.error(f"トークンの更新に失敗しました: {refresh_error}")
+                    session.pop('credentials', None)
+            else:
+                is_authenticated = True
+                
         except Exception as e:
             app.logger.error(f"認証情報の読み込みエラー: {e}")
-            # 無効な認証情報は削除
-            if os.path.exists(token_path):
-                os.unlink(token_path)
+            session.pop('credentials', None)
     
     return render_template('index.html', is_authenticated=is_authenticated)
 
@@ -689,20 +893,57 @@ from google.auth.transport.requests import Request
 # Gmail認証用のエンドポイント
 @app.route('/gmail/auth')
 def gmail_auth():
+    # 既に認証済みで有効なトークンがある場合はプロジェクト一覧にリダイレクト
+    if 'credentials' in session:
+        try:
+            creds = Credentials(
+                token=session['credentials']['token'],
+                refresh_token=session['credentials']['refresh_token'],
+                token_uri=session['credentials']['token_uri'],
+                client_id=session['credentials']['client_id'],
+                client_secret=session['credentials']['client_secret'],
+                scopes=session['credentials']['scopes']
+            )
+            
+            # トークンの有効期限をチェック
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+                # 新しいトークンでセッションを更新
+                session['credentials'] = {
+                    'token': creds.token,
+                    'refresh_token': creds.refresh_token,
+                    'token_uri': creds.token_uri,
+                    'client_id': creds.client_id,
+                    'client_secret': creds.client_secret,
+                    'scopes': creds.scopes,
+                    'expiry': creds.expiry.isoformat() if creds.expiry else None
+                }
+                session.modified = True
+            
+            # 既に認証済みの場合はプロジェクト一覧にリダイレクト
+            app.logger.info("Already authenticated, redirecting to projects")
+            return redirect(url_for('get_projects'))
+            
+        except Exception as e:
+            app.logger.warning(f"Existing token validation failed: {str(e)}")
+            # トークンが無効な場合はセッションから削除
+            session.pop('credentials', None)
+    
     # リファラ（元のページ）をセッションに保存
-    referrer = request.referrer or url_for('index')
+    referrer = request.referrer or url_for('get_projects')
     session['next'] = referrer
     
     try:
         app.logger.debug("Starting Gmail authentication process")
-        # リダイレクトURIを生成
-        redirect_uri = url_for('gmail_auth_callback', _external=True)
+        # リダイレクトURIを明示的に指定
+        redirect_uri = 'http://127.0.0.1:5000/gmail/auth/callback'
         app.logger.debug(f"Using redirect_uri: {redirect_uri}")
         
         # credentials.jsonの存在を確認
         if not os.path.exists('credentials.json'):
             app.logger.error("credentials.json not found")
-            return "credentials.json ファイルが見つかりません。", 500
+            flash('認証に必要な設定ファイルが見つかりません。', 'error')
+            return redirect(url_for('get_projects'))
             
         # OAuth2フローの設定
         flow = Flow.from_client_secrets_file(
@@ -714,12 +955,12 @@ def gmail_auth():
         # CSRF対策のための状態トークンを生成
         state = secrets.token_urlsafe(16)
         
-        # 認証URLを生成
+        # 認証URLを生成（一度だけ承認を求める）
         auth_url, _ = flow.authorization_url(
             access_type='offline',
             include_granted_scopes='true',
             state=state,
-            prompt='select_account'  # 常にアカウント選択を表示
+            prompt='consent'  # 明示的な同意を求める
         )
         
         # フローデータをセッションに保存
@@ -727,24 +968,17 @@ def gmail_auth():
             'state': state,
             'redirect_uri': redirect_uri,
             'timestamp': datetime.now().timestamp(),
-            'next': referrer  # リダイレクト先も保存
+            'next': referrer
         }
         session.modified = True
-        
-        # 古いトークンファイルが残っている場合は削除
-        token_path = 'token.pickle'
-        if os.path.exists(token_path):
-            try:
-                os.unlink(token_path)
-            except Exception as e:
-                app.logger.warning(f"Failed to remove old token file: {e}")
         
         app.logger.info("Redirecting to Google OAuth URL")
         return redirect(auth_url)
         
     except Exception as e:
         app.logger.error(f"Error in gmail_auth: {str(e)}", exc_info=True)
-        return f"認証エラーが発生しました: {str(e)}", 500
+        flash(f'認証の開始中にエラーが発生しました: {str(e)}', 'error')
+        return redirect(session.get('next', url_for('get_projects')))
 
 # Gmail認証コールバック用のエンドポイント
 @app.route('/gmail/auth/callback')
@@ -755,31 +989,36 @@ def gmail_auth_callback():
     oauth_flow = session.get('oauth_flow')
     if not oauth_flow:
         app.logger.error("OAuth flow data not found in session")
-        return "セッションが無効です。最初からやり直してください。", 400
+        flash('セッションが無効です。最初からやり直してください。', 'error')
+        return redirect(url_for('get_projects'))
     
     # 状態の検証
     expected_state = oauth_flow.get('state')
     if not expected_state or expected_state != request.args.get('state'):
         app.logger.error(f"Invalid state parameter. Expected: {expected_state}, Got: {request.args.get('state')}")
-        return "無効なリクエストです。最初からやり直してください。", 400
+        flash('無効なリクエストです。最初からやり直してください。', 'error')
+        return redirect(url_for('get_projects'))
     
     # タイムアウトチェック（30分以内）
     if datetime.now().timestamp() - oauth_flow.get('timestamp', 0) > 1800:
         app.logger.error("OAuth flow timed out")
         session.pop('oauth_flow', None)
         session.modified = True
-        return "セッションの有効期限が切れました。もう一度お試しください。", 400
+        flash('セッションの有効期限が切れました。もう一度お試しください。', 'error')
+        return redirect(url_for('get_projects'))
     
     # エラーチェック
     if 'error' in request.args:
         error_msg = request.args.get('error_description', request.args.get('error', '不明なエラー'))
         app.logger.error(f"OAuth error: {error_msg}")
-        return f"認証エラーが発生しました: {error_msg}", 400
+        flash(f'認証エラーが発生しました: {error_msg}', 'error')
+        return redirect(url_for('get_projects'))
     
     # 認証コードの確認
     if 'code' not in request.args:
         app.logger.error("No authorization code in callback")
-        return "認証コードが提供されていません。", 400
+        flash('認証コードが提供されていません。', 'error')
+        return redirect(url_for('get_projects'))
     
     try:
         # フローの再構築
@@ -795,54 +1034,22 @@ def gmail_auth_callback():
             flow.fetch_token(authorization_response=request.url)
         except Exception as e:
             app.logger.error(f"Error exchanging code for token: {str(e)}")
-            return f"認証トークンの取得に失敗しました: {str(e)}", 500
+            flash(f'認証トークンの取得に失敗しました: {str(e)}', 'error')
+            return redirect(url_for('get_projects'))
         
         # 認証情報を取得
         credentials = flow.credentials
         if not credentials:
             app.logger.error("No credentials received from OAuth flow")
-            return "認証情報が返されませんでした。", 400
+            flash('認証情報が返されませんでした。', 'error')
+            return redirect(url_for('get_projects'))
             
         if not hasattr(credentials, 'valid') or not credentials.valid:
             app.logger.error(f"Invalid credentials received. Credentials: {credentials.__dict__}")
-            return "無効な認証情報が返されました。", 400
+            flash('無効な認証情報が返されました。', 'error')
+            return redirect(url_for('get_projects'))
             
         app.logger.debug(f"Received valid credentials. Token expires at: {getattr(credentials, 'expiry', 'Not specified')}")
-        
-        # トークンを安全に保存
-        token_path = 'token.pickle'
-        try:
-            # 既存のトークンファイルをバックアップ
-            backup_path = None
-            if os.path.exists(token_path):
-                backup_path = f"{token_path}.bak"
-                os.replace(token_path, backup_path)
-                
-            # 新しいトークンを保存
-            with open(token_path, 'wb') as token:
-                pickle.dump(credentials, token)
-                
-            # バックアップが成功したら古いバックアップを削除
-            if backup_path and os.path.exists(backup_path):
-                os.unlink(backup_path)
-                
-            # パーミッションを制限（Unix系のみ）
-            if os.name == 'posix':
-                os.chmod(token_path, 0o600)
-                
-            app.logger.info(f"Successfully saved token to {token_path}")
-            
-        except Exception as e:
-            # エラーが発生した場合はバックアップから復元
-            if backup_path and os.path.exists(backup_path):
-                try:
-                    os.replace(backup_path, token_path)
-                    app.logger.warning("Restored token from backup after error")
-                except Exception as restore_error:
-                    app.logger.error(f"Failed to restore token from backup: {str(restore_error)}")
-                    
-            app.logger.error(f"Error saving token: {str(e)}", exc_info=True)
-            return f"認証情報の保存中にエラーが発生しました: {str(e)}", 500
         
         # 認証情報をセッションに保存
         session['credentials'] = {
@@ -854,26 +1061,32 @@ def gmail_auth_callback():
             'scopes': credentials.scopes,
             'expiry': credentials.expiry.isoformat() if credentials.expiry else None
         }
+        session['gmail_authenticated'] = True
+        session.modified = True
         
-        # リダイレクト先を取得（デフォルトはトップページ）
-        next_page = session.get('oauth_flow', {}).get('next', url_for('index'))
+        # リダイレクト先を取得（デフォルトはプロジェクト一覧）
+        next_page = oauth_flow.get('next', url_for('get_projects'))
         
-        # セッションをクリア
+        # セッションから一時データをクリア
         session.pop('oauth_flow', None)
         session.pop('oauth_state', None)
         session.pop('next', None)
-        session.modified = True
         
         app.logger.info(f"Successfully authenticated with Gmail API, redirecting to: {next_page}")
+        flash('Gmail認証が完了しました。', 'success')
         return redirect(next_page)
         
     except Exception as e:
         app.logger.error(f"Error in gmail_auth_callback: {str(e)}", exc_info=True)
         # エラーが発生した場合は認証状態をクリア
+        session.pop('credentials', None)
         session.pop('oauth_flow', None)
         session.pop('oauth_state', None)
+        session.pop('gmail_authenticated', None)
         session.modified = True
-        return f"認証処理中にエラーが発生しました: {str(e)}", 500
+        
+        flash(f'認証処理中にエラーが発生しました: {str(e)}', 'error')
+        return redirect(url_for('get_projects'))
 
 # Gmail認証状態確認用のエンドポイント
 @app.route('/api/gmail/auth/status')
@@ -973,66 +1186,42 @@ def search_gmail_emails(service, skills, normalized_skills):
         print(f"Gmail検索中にエラーが発生しました: {e}")
         raise
 
-# スキルに基づいて案件を検索するAPI
-@app.route('/api/search_projects', methods=['POST'])
-def search_projects():
-    try:
-        data = request.get_json()
-        if not data or 'skills' not in data or not data['skills']:
-            return jsonify({'status': 'error', 'message': 'スキルが指定されていません'}), 400
-        
-        skills = data['skills']
-        if not isinstance(skills, list):
-            return jsonify({'status': 'error', 'message': '無効なスキル形式です'}), 400
-        
-        # 空のスキルを除外して正規化
-        normalized_skills = [skill.lower().strip() for skill in skills if skill.strip()]
-        if not normalized_skills:
-            return jsonify({'status': 'error', 'message': '有効なスキルが指定されていません'}), 400
-        
-        # Gmail APIからメールを検索
-        service = get_gmail_service()
-        if not service:
-            return jsonify({
-                'status': 'error',
-                'message': 'Gmailサービスに接続できませんでした。認証が必要です。'
-            }), 500
-        
-        # Gmailからメールを検索して案件を取得
-        projects = search_gmail_emails(service, skills, normalized_skills)
-        
-        # マッチスコアでソート（降順）
-        projects.sort(key=lambda x: x['match_score'], reverse=True)
-        
-        return jsonify({
-            'status': 'success',
-            'projects': projects,
-            'total': len(projects)
-        })
-        
-    except Exception as e:
-        print(f"プロジェクト検索中にエラーが発生しました: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': f'プロジェクトの検索中にエラーが発生しました: {str(e)}'
-        }), 500
+# このエンドポイントは /api/projects に統合されました
 
 # スキルを保存するAPIエンドポイント
 @app.route('/api/save_skills', methods=['POST'])
 def save_skills():
     try:
         data = request.get_json()
-        if not data or 'skills' not in data or not data['skills']:
-            return jsonify({'status': 'error', 'message': 'スキルが指定されていません'}), 400
         
+        # 必須パラメータのバリデーション
+        if not data:
+            return jsonify({'status': 'error', 'message': 'リクエストボディが空です'}), 400
+            
+        if 'skills' not in data or not data['skills']:
+            return jsonify({'status': 'error', 'message': 'スキルが指定されていません'}), 400
+            
+        # engineerIdが指定されていない場合はデフォルト値（'1'）を使用
         engineer_id = data.get('engineerId', '1')
         skills = data['skills']
         
-        if not isinstance(skills, list):
-            return jsonify({'status': 'error', 'message': '無効なスキル形式です'}), 400
+        # スキルの型チェック（リストまたは文字列のカンマ区切りをサポート）
+        if isinstance(skills, str):
+            skills = [s.strip() for s in skills.split(',') if s.strip()]
+        elif not isinstance(skills, list):
+            return jsonify({'status': 'error', 'message': '無効なスキル形式です。配列またはカンマ区切りの文字列を指定してください。'}), 400
         
-        # スキルをカンマ区切りの文字列に変換
-        skills_str = ','.join(skills)
+        # スキルをカンマ区切りの文字列に変換（オブジェクト配列にも対応）
+        processed_skills = []
+        for s in skills:
+            if isinstance(s, dict):
+                # オブジェクトの場合、name または skill_name を使用
+                processed_skills.append(s.get('name') or s.get('skill_name') or '')
+            else:
+                processed_skills.append(str(s))
+        # 空文字列を除外
+        processed_skills = [ps.strip() for ps in processed_skills if ps.strip()]
+        skills_str = ','.join(processed_skills)
         
         # データベースに保存
         conn = get_db()
@@ -1274,6 +1463,133 @@ def get_emails():
         return jsonify({
             'status': 'error',
             'message': str(e)
+        }), 500
+
+@app.route('/api/projects', methods=['GET'])
+def search_projects():
+    """プロジェクトを検索する"""
+    try:
+        # クエリパラメータを取得
+        search_query = request.args.get('q', '').strip()
+        sort_by = request.args.get('sort', 'date')
+        skills = [s.strip() for s in request.args.get('skills', '').split(',') if s.strip()]
+        locations = [loc.strip() for loc in request.args.get('locations', '').split(',') if loc.strip()]
+        
+        # 給与フィルターのバリデーション
+        try:
+            min_salary = int(request.args.get('min_salary')) if request.args.get('min_salary') else None
+            max_salary = int(request.args.get('max_salary')) if request.args.get('max_salary') else None
+        except ValueError:
+            return jsonify({
+                'success': False,
+                'error': '給与は数値で指定してください'
+            }), 400
+        
+        # データベース接続を取得
+        conn = get_db()
+        c = conn.cursor()
+        
+        # 基本クエリ
+        query = '''
+            SELECT p.id, p.name as title, p.description, p.location, 
+                   COALESCE(p.min_budget, 0) as salary,
+                   p.start_date as created_at, 
+                   p.start_date as updated_at,
+                   GROUP_CONCAT(DISTINCT pr.skill) as required_skills
+            FROM projects p
+            LEFT JOIN project_requirements pr ON p.id = pr.project_id
+            WHERE 1=1
+        '''
+        
+        params = []
+        
+        # 検索クエリがある場合
+        if search_query:
+            query += ' AND (p.name LIKE ? OR p.description LIKE ?)'
+            search_term = f'%{search_query}%'
+            params.extend([search_term, search_term])
+        
+        # スキルフィルター
+        if skills:
+            placeholders = ','.join(['?'] * len(skills))
+            query += f'''
+                AND p.id IN (
+                    SELECT pr2.project_id 
+                    FROM project_requirements pr2 
+                    WHERE pr2.skill IN ({placeholders})
+                    GROUP BY pr2.project_id
+                )
+            '''
+            params.extend(skills)
+        
+        # 勤務地フィルター
+        if locations:
+            placeholders = ','.join(['?'] * len(locations))
+            query += f' AND p.location IN ({placeholders})'
+            params.extend(locations)
+        
+        # 給与フィルター
+        if min_salary is not None:
+            query += ' AND (p.min_budget >= ? OR p.min_budget IS NULL)'
+            params.append(min_salary)
+        if max_salary is not None:
+            query += ' AND (p.min_budget <= ? OR p.min_budget IS NULL)'
+            params.append(max_salary)
+        
+        # グループ化
+        query += ' GROUP BY p.id, p.name, p.description, p.location, p.min_budget, p.start_date'
+        
+        # ソート
+        if sort_by == 'date':
+            query += ' ORDER BY p.start_date DESC'
+        elif sort_by == 'salary_high':
+            query += ' ORDER BY p.min_budget DESC'
+        elif sort_by == 'salary_low':
+            query += ' ORDER BY p.min_budget ASC'
+        else:
+            query += ' ORDER BY p.start_date DESC'  # デフォルト
+            
+        # デバッグ用にクエリをログに出力
+        app.logger.debug(f'Executing query: {query}')
+        app.logger.debug(f'With params: {params}')
+        
+        try:
+            # クエリ実行
+            c.execute(query, params)
+            
+            # 結果を辞書のリストに変換
+            projects = []
+            for row in c.fetchall():
+                project = dict(row)
+                # 必要なフィールドが存在するか確認
+                if 'required_skills' in project and project['required_skills']:
+                    project['required_skills'] = [s.strip() for s in project['required_skills'].split(',') if s.strip()]
+                else:
+                    project['required_skills'] = []
+                projects.append(project)
+            
+            return jsonify({
+                'success': True,
+                'projects': projects,
+                'count': len(projects)
+            })
+            
+        except Exception as db_error:
+            app.logger.error(f'データベースクエリエラー: {str(db_error)}')
+            app.logger.error(f'Query: {query}')
+            app.logger.error(f'Params: {params}')
+            return jsonify({
+                'success': False,
+                'message': 'データの取得中にエラーが発生しました',
+                'error': str(db_error)
+            }), 500
+            
+    except Exception as e:
+        app.logger.error(f'プロジェクト検索エラー: {str(e)}', exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': 'サーバーでエラーが発生しました',
+            'error': str(e) if app.debug else None
         }), 500
 
 @app.route('/api/emails/<email_id>', methods=['GET'])
@@ -1608,14 +1924,10 @@ def get_projects_api():
         }), 500
 
 @app.route('/projects', methods=['GET'])
-@login_required
 def get_projects():
     """
     プロジェクト一覧ページを表示する
     """
-    # 認証情報を取得（login_requiredデコレータで認証済みであることが保証されている）
-    credentials = Credentials(**session['credentials'])
-    
     conn = None
     try:
         conn = get_db()
@@ -1628,6 +1940,7 @@ def get_projects():
             FROM projects p
             LEFT JOIN project_requirements pr ON p.id = pr.project_id
             GROUP BY p.id
+            ORDER BY p.created_at DESC
         ''')
         
         projects = []
@@ -1642,7 +1955,7 @@ def get_projects():
         return render_template('projects.html', projects=projects)
         
     except Exception as e:
-        app.logger.error(f'Error fetching projects: {str(e)}')
+        app.logger.error(f'プロジェクト取得エラー: {str(e)}')
         # エラーが発生した場合は空のリストを渡してテンプレートをレンダリング
         return render_template('projects.html', projects=[])
         
@@ -1671,33 +1984,29 @@ def get_gmail_service():
         app.logger.debug("No credentials in session for get_gmail_service")
         return None
     
+        
     try:
-        # セッションから認証情報を復元
-        creds_dict = session['credentials'].copy()  # セッションを変更しないようにコピー
-        
-        # 有効期限をdatetimeオブジェクトに変換
-        if 'expiry' in creds_dict and isinstance(creds_dict['expiry'], str):
-            creds_dict['expiry'] = datetime.fromisoformat(creds_dict['expiry'])
-        
-        # 認証情報オブジェクトを作成
+        # セッションから認証情報を取得
+        creds_info = session['credentials']
         creds = Credentials(
-            token=creds_dict.get('token'),
-            refresh_token=creds_dict.get('refresh_token'),
-            token_uri=creds_dict.get('token_uri'),
-            client_id=creds_dict.get('client_id'),
-            client_secret=creds_dict.get('client_secret'),
-            scopes=creds_dict.get('scopes'),
-            expiry=creds_dict.get('expiry')
+            token=creds_info['token'],
+            refresh_token=creds_info.get('refresh_token'),  # refresh_tokenは初回のみの可能性があるためgetを使用
+            token_uri=creds_info['token_uri'],
+            client_id=creds_info['client_id'],
+            client_secret=creds_info['client_secret'],
+            scopes=creds_info['scopes']
         )
         
-        # トークンの有効期限を確認し、必要に応じて更新
+        # トークンの有効期限をチェックして必要に応じて更新
         if creds.expired and creds.refresh_token:
             try:
+                app.logger.info("Refreshing expired token")
                 creds.refresh(Request())
+                
                 # 更新した認証情報をセッションに保存
                 session['credentials'] = {
                     'token': creds.token,
-                    'refresh_token': creds.refresh_token,
+                    'refresh_token': creds.refresh_token,  # 新しいリフレッシュトークン（あれば）
                     'token_uri': creds.token_uri,
                     'client_id': creds.client_id,
                     'client_secret': creds.client_secret,
@@ -1705,25 +2014,39 @@ def get_gmail_service():
                     'expiry': creds.expiry.isoformat() if creds.expiry else None
                 }
                 session.modified = True
-                app.logger.info("Successfully refreshed token in get_gmail_service")
-            except Exception as refresh_error:
-                app.logger.error(f"トークンの更新に失敗しました: {refresh_error}")
+                app.logger.info("Token refreshed successfully")
+                
+            except Exception as e:
+                app.logger.error(f"Failed to refresh token: {str(e)}", exc_info=True)
+                # 認証情報が無効な場合はセッションから削除
                 session.pop('credentials', None)
+                session.pop('gmail_authenticated', None)
                 return None
         
-        # 有効な認証情報がない場合はNoneを返す
-        if not creds or not creds.valid:
+        # 認証情報が有効か確認
+        if not creds.valid:
+            app.logger.warning("Invalid credentials")
+            session.pop('credentials', None)
+            session.pop('gmail_authenticated', None)
             return None
-        
-        # Gmail APIのサービスを構築して返す
-        service = build('gmail', 'v1', 
-                      credentials=creds,
-                      cache_discovery=False)  # キャッシュの無効化
-        return service
-        
+            
+        # Gmail APIサービスを構築して返す
+        try:
+            service = build('gmail', 'v1', credentials=creds)
+            return service
+            
+        except Exception as e:
+            app.logger.error(f"Failed to create Gmail service: {str(e)}", exc_info=True)
+            # サービス作成に失敗した場合は認証情報を無効化
+            session.pop('credentials', None)
+            session.pop('gmail_authenticated', None)
+            return None
+            
     except Exception as e:
-        app.logger.error(f"Gmailサービスの作成中にエラーが発生しました: {e}", exc_info=True)
+        app.logger.error(f"Error in get_gmail_service: {str(e)}", exc_info=True)
+        # エラーが発生した場合は認証情報をクリア
         session.pop('credentials', None)
+        session.pop('gmail_authenticated', None)
         return None
 
 if __name__ == '__main__':

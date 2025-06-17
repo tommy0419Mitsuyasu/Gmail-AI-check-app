@@ -212,45 +212,16 @@ let currentFilters = {
     locations: [],
     minSalary: null,
     maxSalary: null,
-    sortBy: 'date', // デフォルトは日付順
-    searchQuery: ''
+    employmentTypes: [],
+    experienceLevels: []
 };
-
-// 認証状態を確認する関数
-function checkAuth() {
-    return fetch('/api/auth/status', {
-        method: 'GET',
-        credentials: 'same-origin',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (!data.authenticated) {
-            // 認証されていない場合はログインページにリダイレクト
-            window.location.href = '/gmail/auth';
-            return false;
-        }
-        return true;
-    })
-    .catch(error => {
-        console.error('認証状態の確認中にエラーが発生しました:', error);
-        return false;
-    });
-}
+let sortBy = 'date';
+let searchQuery = '';
 
 // ページ読み込み時に実行
 document.addEventListener('DOMContentLoaded', function() {
-    checkAuth().then(isAuthenticated => {
-        if (isAuthenticated) {
-            initializeEventListeners();
-            // 初期表示時にローディングを非表示にする
-            const loadingIndicator = document.getElementById('loadingIndicator');
-            if (loadingIndicator) loadingIndicator.classList.add('hidden');
-            fetchProjects();
-        }
-    });
+    initializeEventListeners();
+    fetchProjects();
 });
 
 /**
@@ -445,11 +416,11 @@ function fetchProjects() {
     const loadingIndicator = document.getElementById('loadingIndicator');
     const projectsList = document.getElementById('projectsList');
     
+    // ローディング表示
+    if (loadingIndicator) loadingIndicator.classList.remove('hidden');
+    if (projectsList) projectsList.innerHTML = '';
+    
     try {
-        // ローディング表示
-        if (loadingIndicator) loadingIndicator.classList.remove('hidden');
-        if (projectsList) projectsList.innerHTML = '';
-        
         // 検索クエリを取得
         const searchQuery = document.getElementById('searchInput')?.value || '';
         const sortBy = document.getElementById('sortBy')?.value || 'date';
@@ -479,19 +450,31 @@ function fetchProjects() {
         
         // リクエストURLを構築
         const apiUrl = `/api/projects?${params.toString()}`;
+        console.log('APIリクエストを送信します:', apiUrl);
         
         // APIリクエストを送信
         fetch(apiUrl, {
             method: 'GET',
             headers: {
-                'Content-Type': 'application/json',
+                'Accept': 'application/json',
                 'Cache-Control': 'no-cache'
             },
             credentials: 'same-origin'
         })
-        .then(handleApiResponse)
+        .then(response => {
+            console.log('APIレスポンスを受信しました:', response.status, response.statusText);
+            return handleApiResponse(response);
+        })
         .then(data => {
-            allProjects = Array.isArray(data.projects) ? data.projects : [];
+            console.log('APIレスポンスデータ:', data);
+            if (!data || typeof data !== 'object') {
+                throw new Error('無効なレスポンス形式です');
+            }
+            
+            // 互換性のため、data.projects と data.data.projects の両方をチェック
+            const projects = data.projects || (data.data && data.data.projects) || [];
+            allProjects = Array.isArray(projects) ? projects : [];
+            
             if (allProjects.length === 0) {
                 showNoProjectsMessage();
             } else {
@@ -500,11 +483,13 @@ function fetchProjects() {
         })
         .catch(error => {
             console.error('プロジェクトの取得に失敗しました:', error);
-            showErrorMessage('プロジェクトの取得中にエラーが発生しました。しばらくしてからもう一度お試しください。');
+            // エラーメッセージを表示（エラーオブジェクトから詳細を取得）
+            const errorMessage = error.message || 'プロジェクトの取得中にエラーが発生しました';
+            showErrorMessage(`エラー: ${errorMessage}`);
         });
     } catch (error) {
         console.error('プロジェクトの取得中に予期せぬエラーが発生しました:', error);
-        showErrorMessage('予期せぬエラーが発生しました。ページを更新してください。');
+        showErrorMessage(`予期せぬエラーが発生しました: ${error.message || '不明なエラー'}`);
     } finally {
         if (loadingIndicator) loadingIndicator.classList.add('hidden');
     }
@@ -515,11 +500,27 @@ function fetchProjects() {
  */
 function handleApiResponse(response) {
     if (!response.ok) {
+        // エラーレスポンスから詳細を取得
         return response.json().then(err => {
-            throw new Error(err.message || 'サーバーエラーが発生しました');
+            console.error('APIエラーレスポンス:', err);
+            // エラーメッセージを構築
+            let errorMessage = 'サーバーエラーが発生しました';
+            if (err && typeof err === 'object') {
+                errorMessage = err.message || errorMessage;
+                if (err.error) {
+                    errorMessage += ` (${err.error})`;
+                }
+            }
+            throw new Error(errorMessage);
+        }).catch(parseError => {
+            console.error('エラーレスポンスの解析に失敗しました:', parseError);
+            throw new Error('サーバーからの応答を処理できませんでした');
         });
     }
-    return response.json();
+    return response.json().catch(error => {
+        console.error('レスポンスの解析に失敗しました:', error);
+        throw new Error('サーバーからの応答が不正な形式です');
+    });
 }
 
 /**
@@ -540,32 +541,37 @@ function displayProjects(projects) {
         // プロジェクトを表示
         projectsList.innerHTML = projects.map(project => {
             // スキルタグを生成
-            const skillTags = project.skills && project.skills.length > 0 
-                ? project.skills.map(skill => 
+            const skills = project.required_skills || [];
+            const skillTags = skills.length > 0 
+                ? skills.map(skill => 
                     `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 mr-2 mb-2">
-                        ${escapeHtml(skill)}
+                        ${escapeHtml(skill.trim())}
                     </span>`
                 ).join('')
                 : '<span class="text-gray-400 text-sm">スキル情報がありません</span>';
 
             // 日付をフォーマット
-            const formattedDate = project.date 
-                ? new Date(project.date).toLocaleDateString('ja-JP') 
-                : '日付不明';
+            const formattedDate = project.created_at 
+                ? new Date(project.created_at).toLocaleDateString('ja-JP')
+                : project.posted_date || '日付不明';
 
             // 給与表示
-            const salaryDisplay = project.salary > 0 
+            const salary = parseInt(project.salary) || 0;
+            const salaryDisplay = salary > 0 
                 ? `<span class="ml-4 inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
-                      ${project.salary.toLocaleString()}万円〜
+                      ${salary.toLocaleString()}万円〜
                    </span>`
                 : '';
 
+            // 勤務地
+            const location = project.location || '未記載';
+            
             return `
                 <div class="bg-white shadow-md rounded-lg p-6 border border-gray-200 hover:shadow-lg transition-shadow duration-200">
                     <div class="flex justify-between items-start">
                         <div class="flex-1 min-w-0">
                             <h3 class="text-lg font-semibold text-gray-900 truncate">
-                                ${escapeHtml(project.subject || '件名なし')}
+                                ${escapeHtml(project.title || 'タイトルなし')}
                             </h3>
                             <p class="text-sm text-gray-500 mt-1">${formattedDate}</p>
                         </div>
@@ -573,7 +579,7 @@ function displayProjects(projects) {
                     </div>
                     
                     <div class="mt-4">
-                        <p class="text-gray-700 line-clamp-3">${escapeHtml(project.snippet || '')}</p>
+                        <p class="text-gray-700 line-clamp-3">${escapeHtml(project.description || '')}</p>
                     </div>
                     
                     <div class="mt-4 flex flex-wrap gap-2">
@@ -582,13 +588,15 @@ function displayProjects(projects) {
                     
                     <div class="mt-4 pt-4 border-t border-gray-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                         <div class="text-sm text-gray-500">
-                            <span>${escapeHtml(project.location || '勤務地: 未記載')}</span>
+                            <span>勤務地: ${escapeHtml(location)}</span>
                         </div>
                         <div class="flex space-x-2 w-full sm:w-auto">
-                            <button data-thread-id="${project.threadId}" 
-                                    class="open-thread-btn w-full sm:w-auto px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-                                スレッドを開く
-                            </button>
+                            ${project.thread_id ? `
+                                <button data-thread-id="${project.thread_id}" 
+                                        class="open-thread-btn w-full sm:w-auto px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                                    スレッドを開く
+                                </button>
+                            ` : ''}
                             <button data-project-id="${project.id}"
                                     class="view-details-btn w-full sm:w-auto px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
                                 詳細を見る
@@ -677,6 +685,8 @@ function showNoProjectsMessage() {
     const projectsList = document.getElementById('projectsList');
     const noResults = document.getElementById('noResults');
     const initialMessage = document.getElementById('initialMessage');
+    const searchInput = document.getElementById('searchInput');
+    const currentSearch = searchInput ? searchInput.value.trim() : '';
     
     if (!projectsList) return;
     
@@ -692,19 +702,40 @@ function showNoProjectsMessage() {
         if (noResults) {
             noResults.classList.remove('hidden');
         } else {
-            // フォールバックとして直接メッセージを表示
+            // 検索クエリがあるかどうかでメッセージを切り替え
+            let title, description, showResetButton = true;
+            
+            if (currentSearch) {
+                title = '検索条件に一致する案件が見つかりませんでした';
+                description = `「${escapeHtml(currentSearch)}」に一致する検索結果はありません。`;
+            } else if (Object.values(currentFilters).some(filter => 
+                (Array.isArray(filter) && filter.length > 0) || 
+                (!Array.isArray(filter) && filter !== null && filter !== undefined)
+            )) {
+                title = 'フィルターに一致する案件が見つかりませんでした';
+                description = '設定されたフィルター条件に一致する案件がありません。';
+            } else {
+                title = '登録されている案件がありません';
+                description = '現在、表示できる案件が登録されていません。';
+                showResetButton = false;
+            }
+            
+            // メッセージを表示
             projectsList.innerHTML = `
-                <div class="text-center py-12">
-                    <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div class="text-center py-16 bg-white rounded-lg shadow-sm border border-gray-200">
+                    <svg class="mx-auto h-16 w-16 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    <h3 class="mt-2 text-sm font-medium text-gray-900">該当する案件が見つかりません</h3>
-                    <p class="mt-1 text-sm text-gray-500">検索条件を変更してお試しください。</p>
-                    <div class="mt-6">
-                        <button type="button" id="resetFiltersBtn" class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-                            フィルターをリセット
-                        </button>
-                    </div>
+                    <h3 class="mt-4 text-lg font-medium text-gray-900">${title}</h3>
+                    <p class="mt-2 text-base text-gray-600 max-w-md mx-auto">${description}</p>
+                    ${showResetButton ? `
+                        <div class="mt-6">
+                            <button type="button" id="resetFiltersBtn" 
+                                class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
+                                フィルターをリセットして全て表示
+                            </button>
+                        </div>
+                    ` : ''}
                 </div>
             `;
             

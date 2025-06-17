@@ -74,7 +74,7 @@ function initElements() {
     elements.skillsByCategory = document.getElementById('skillsByCategory');
     elements.textPreview = document.getElementById('textPreview');
     elements.backToUpload = document.getElementById('backToUpload');
-    elements.saveSkillsBtn = document.getElementById('saveSkills');
+    elements.saveSkillsBtn = document.getElementById('saveSkillsBtn');
     
     // Gmail関連
     elements.findProjectsBtn = document.getElementById('findProjectsBtn');
@@ -414,12 +414,28 @@ function showResults(skills, extractedText) {
         elements.textPreview.textContent = extractedText || 'テキストを抽出できませんでした。';
     }
     
+    // skills がオブジェクト (カテゴリ別辞書) の場合はフラットな配列に展開
+    if (!Array.isArray(skills) && typeof skills === 'object' && skills !== null) {
+        const flatSkills = [];
+        Object.entries(skills).forEach(([category, skillArray]) => {
+            if (Array.isArray(skillArray)) {
+                skillArray.forEach(s => {
+                    if (s) {
+                        flatSkills.push({ ...s, category_name: category });
+                    }
+                });
+            }
+        });
+        skills = flatSkills;
+    }
+
     // スキルをカテゴリごとにグループ化
     const categories = {};
     
-    // スキルが配列でない場合や空の場合は処理をスキップ
+    // スキルが配列でない場合や空の場合はエラーメッセージを表示
     if (!Array.isArray(skills) || skills.length === 0) {
         console.warn('スキルデータが不正または空です。');
+        showError('エラー', 'スキルデータが見つかりませんでした', 'スキルシートからスキルを抽出できませんでした。別のファイルをアップロードしてください。');
         return;
     }
     
@@ -438,12 +454,19 @@ function showResults(skills, extractedText) {
         skillsHtml += `
             <div class="mb-6">
                 <h3 class="text-lg font-medium text-gray-900 mb-2">${category}</h3>
-                <div class="flex flex-wrap gap-2">
-                    ${skillList.map(skill => 
-                        `<span class="skill-badge inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800 cursor-pointer hover:bg-blue-200 transition-colors">
-                            ${skill.skill_name}
-                        </span>`
-                    ).join('')}
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    ${skillList.map(skill => {
+                        const skillName = skill.name || skill.skill_name || '不明なスキル';
+                        return `
+                        <label class="flex items-center p-2 rounded-md border border-gray-200 hover:bg-gray-50 cursor-pointer">
+                            <input type="checkbox" 
+                                   class="skill-checkbox h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 mr-2" 
+                                   value="${skillName}" 
+                                   data-skill='${JSON.stringify(skill)}'
+                                   checked>
+                            <span class="text-sm text-gray-700">${skillName}</span>
+                        </label>`;
+                    }).join('')}
                 </div>
             </div>`;
     }
@@ -879,18 +902,32 @@ function openGmailWithProject(project) {
 function displayProjects(projects, searchSkills = []) {
     console.log('displayProjects を開始します', { projects, searchSkills });
     
-    const resultsContainer = document.getElementById('matchingProjects');
+    const resultsContainer = document.getElementById('projectsList');
     if (!resultsContainer) {
         console.error('結果を表示するコンテナが見つかりません');
         return;
     }
     
+    // 初期メッセージとローディングを非表示に
+    const initialMessage = document.getElementById('initialMessage');
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    const noResults = document.getElementById('noResults');
+    
+    if (initialMessage) initialMessage.classList.add('hidden');
+    if (loadingIndicator) loadingIndicator.classList.add('hidden');
+    
+    // プロジェクトが空の場合は「検索結果がありません」を表示
+    if (!projects || projects.length === 0) {
+        if (noResults) noResults.classList.remove('hidden');
+        return;
+    }
+    
     // 検索に使用されたスキルを表示
     const searchSkillsHtml = searchSkills.length > 0 
-        ? `<div class="mb-4">
-              <span class="text-sm text-gray-600">検索スキル: </span>
+        ? `<div class="mb-6 p-4 bg-blue-50 rounded-lg">
+              <span class="text-sm font-medium text-gray-700">検索スキル: </span>
               ${searchSkills.map(skill => 
-                  `<span class="inline-block bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded mr-1 mb-1">
+                  `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 mr-2 mb-2">
                       ${skill}
                   </span>`
               ).join('')}
@@ -905,127 +942,117 @@ function displayProjects(projects, searchSkills = []) {
                           matchPercentage >= 40 ? 'bg-yellow-100 text-yellow-800' : 
                           'bg-red-100 text-red-800';
         
-        // Gmailのメールかどうかで表示を分岐
-        if (isGmailProject) {
-            return `
-                <div class="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200 hover:shadow-lg transition-shadow mb-6">
-                    <div class="p-6">
-                        <div class="flex justify-between items-start mb-2">
-                            <h3 class="text-lg font-semibold text-gray-900">${project.name || '件名なし'}</h3>
-                            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${matchColor}">
-                                ${matchPercentage}% マッチ
-                            </span>
-                        </div>
-                        
-                        ${project.client_name ? `
-                            <p class="text-gray-600 mb-2">
-                                <i class="fas fa-user-tie mr-2 text-blue-500"></i>
-                                ${project.client_name}
-                            </p>
-                        ` : ''}
-                        
-                        ${project.date ? `
-                            <p class="text-gray-500 text-sm mb-4">
-                                <i class="far fa-calendar-alt mr-2"></i>
-                                ${formatDate(project.date)}
-                            </p>
-                        ` : ''}
-                        
-                        ${project.snippet ? `
-                            <p class="text-gray-700 mb-4 line-clamp-3">${project.snippet}</p>
-                        ` : ''}
-                        
-                        ${project.matched_skills && project.matched_skills.length > 0 ? `
-                            <div class="mb-4">
-                                <p class="text-sm font-medium text-gray-700 mb-2">マッチしたスキル:</p>
-                                <div class="flex flex-wrap gap-2">
-                                    ${project.matched_skills.map(skill => `
-                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                            ${skill}
-                                        </span>
-                                    `).join('')}
-                                </div>
-                            </div>
-                        ` : ''}
-                        
-                        <div class="flex justify-end space-x-3 mt-4">
-                            <button onclick="event.stopPropagation(); openGmailWithProject(${JSON.stringify(project).replace(/"/g, '&quot;')})" 
-                                    class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-                                <i class="fas fa-envelope mr-2"></i>
-                                Gmailで確認
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            `;
+        // スキルタグを生成
+        let skillsArray = [];
+        if (Array.isArray(project.required_skills)) {
+            skillsArray = project.required_skills;
+        } else if (typeof project.required_skills === 'string') {
+            skillsArray = project.required_skills.split(',').map(skill => skill.trim());
         }
         
-        // 通常の案件カード
-        const skills = project.required_skills_list 
-            ? project.required_skills_list.split(',').map(skill => 
-                `<span class="inline-block bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded mr-1 mb-1">
-                    ${skill.trim()}
+        const skillsHtml = skillsArray.length > 0
+            ? skillsArray.map(skill => 
+                `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 mr-2 mb-2">
+                    ${skill}
                 </span>`
-            ).join('') 
+              ).join('')
             : '';
-            
-        const matchedSkills = project.matched_skills || [];
         
+        // 日付をフォーマット
+        const formatDate = (dateString) => {
+            if (!dateString) return '';
+            const date = new Date(dateString);
+            return date.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
+        };
+        
+        // プロジェクトカードを返す
         return `
-            <div class="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200 hover:shadow-lg transition-shadow cursor-pointer" 
-                 onclick="event.stopPropagation(); openGmailWithProject(${JSON.stringify(project).replace(/"/g, '&quot;')})">
-                <div class="p-6">
-                    <div class="flex justify-between items-start mb-2">
-                        <h3 class="text-xl font-semibold text-gray-800">${project.name || '無題の案件'}</h3>
-                        <span class="bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded">
-                            ${project.work_type || 'その他'}
+        <div class="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200 hover:shadow-lg transition-shadow mb-6">
+            <div class="p-6">
+                <div class="flex justify-between items-start mb-2">
+                    <h3 class="text-lg font-semibold text-gray-900">${project.title || project.name || '無題の案件'}</h3>
+                    ${matchPercentage > 0 ? `
+                        <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${matchColor} ml-4">
+                            ${matchPercentage}% マッチ
                         </span>
-                    </div>
-                    
-                    <p class="text-gray-600 mb-4">${project.description || '説明はありません'}</p>
-                    
-                    <div class="mb-4">
-                        <h4 class="text-sm font-medium text-gray-700 mb-1">必須スキル:</h4>
-                        <div class="flex flex-wrap">
-                            ${skills || '<span class="text-gray-500 text-sm">スキルが指定されていません</span>'}
-                        </div>
-                    </div>
-                    
-                    ${matchedSkills.length > 0 ? `
-                        <div class="mb-4">
-                            <h4 class="text-sm font-medium text-green-700 mb-1">マッチしたスキル (${matchedSkills.length}件):</h4>
-                            <div class="flex flex-wrap">
-                                ${matchedSkills.map(skill => 
-                                    `<span class="inline-block bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded mr-1 mb-1">
-                                        ${skill}
-                                    </span>`
-                                ).join('')}
-                            </div>
+                    ` : ''}
+                </div>
+                
+                ${project.description ? `
+                    <p class="text-gray-600 mb-4 line-clamp-3">
+                        ${project.description}
+                    </p>
+                ` : ''}
+                
+                <div class="flex flex-wrap gap-2 mb-4">
+                    ${skillsHtml}
+                </div>
+                
+                <div class="flex flex-wrap items-center text-sm text-gray-500 gap-4">
+                    ${project.location ? `
+                        <div class="flex items-center">
+                            <i class="fas fa-map-marker-alt mr-1 text-blue-500"></i>
+                            <span>${project.location}</span>
                         </div>
                     ` : ''}
                     
-                    <div class="flex justify-between items-center text-sm mt-4 pt-4 border-t border-gray-100">
-                        <div>
-                            <span class="text-gray-500">${project.location || '場所未指定'}</span>
-                            <span class="mx-2 text-gray-300">|</span>
-                            <span class="font-semibold">
-                                ${project.min_budget ? `¥${Number(project.min_budget).toLocaleString()}〜` : ''}
-                                ${project.max_budget ? `¥${Number(project.max_budget).toLocaleString()}` : ''}
-                                ${!project.min_budget && !project.max_budget ? '要相談' : ''}
-                            </span>
+                    ${project.salary || project.min_budget ? `
+                        <div class="flex items-center">
+                            <i class="fas fa-yen-sign mr-1 text-green-500"></i>
+                            <span>${project.salary || project.min_budget}万円〜${project.max_budget || ''}万円</span>
                         </div>
-                        
-                        <button class="gmail-button inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md" 
-                                onclick="event.stopPropagation(); openGmailWithProject(${JSON.stringify(project).replace(/"/g, '&quot;')});">
-                            Gmailで問い合わせる
-                        </button>
-                    </div>
+                    ` : ''}
+                    
+                    ${project.created_at || project.start_date ? `
+                        <div class="flex items-center">
+                            <i class="far fa-calendar-alt mr-1 text-purple-500"></i>
+                            <span>${formatDate(project.created_at || project.start_date)}</span>
+                        </div>
+                    ` : ''}
+                </div>
+                
+                <div class="mt-4 flex justify-end">
+                    <button onclick="viewProjectDetails('${project.id}')" 
+                            class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                        詳細を見る
+                    </button>
                 </div>
             </div>
-        `;
+        </div>`;
     };
     
-    if (!projects || projects.length === 0) {
+    // プロジェクトを表示
+    if (projects && projects.length > 0) {
+        // プロジェクトグリッドを作成
+        const projectsGrid = document.createElement('div');
+        projectsGrid.className = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6';
+        
+        // 各プロジェクトのカードを追加
+        projects.forEach(project => {
+            const projectCard = document.createElement('div');
+            projectCard.innerHTML = projectCardTemplate(project);
+            projectsGrid.appendChild(projectCard.firstElementChild);
+        });
+        
+        // コンテンツをクリアしてから追加
+        resultsContainer.innerHTML = '';
+        
+        // 検索スキルを表示
+        if (searchSkillsHtml) {
+            resultsContainer.innerHTML = searchSkillsHtml;
+        }
+        
+        // プロジェクトグリッドを追加
+        resultsContainer.appendChild(projectsGrid);
+        
+        // 検索結果セクションを表示してスクロール
+        const resultsSection = document.getElementById('matchingProjectsSection');
+        if (resultsSection) {
+            resultsSection.classList.remove('hidden');
+            resultsSection.scrollIntoView({ behavior: 'smooth' });
+        }
+    } else {
+        // プロジェクトがない場合のメッセージを表示
         console.log('表示する案件がありません');
         resultsContainer.innerHTML = `
             <div class="text-center py-12">
@@ -1034,33 +1061,6 @@ function displayProjects(projects, searchSkills = []) {
                 <p class="text-sm text-gray-400 mt-2">検索条件を変更してお試しください</p>
             </div>
         `;
-        return;
-    }
-    
-    // 検索スキルを表示
-    if (searchSkillsHtml) {
-        resultsContainer.innerHTML = searchSkillsHtml;
-    } else {
-        resultsContainer.innerHTML = '';
-    }
-    
-    // プロジェクトカードを追加
-    const projectsGrid = document.createElement('div');
-    projectsGrid.className = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6';
-    
-    projects.forEach((project, index) => {
-        const projectCard = document.createElement('div');
-        projectCard.innerHTML = projectCardTemplate(project, index);
-        projectsGrid.appendChild(projectCard.firstElementChild);
-    });
-    
-    resultsContainer.appendChild(projectsGrid);
-    
-    // 検索結果セクションを表示してスクロール
-    const resultsSection = document.getElementById('matchingProjectsSection');
-    if (resultsSection) {
-        resultsSection.classList.remove('hidden');
-        resultsSection.scrollIntoView({ behavior: 'smooth' });
     }
 }
 
@@ -1126,106 +1126,66 @@ function viewEmail(emailId) {
 }
 
 // スキルを保存する関数
-function saveSkills() {
+async function saveSkills() {
     console.log('スキル保存処理を開始します');
-    const extractedSkills = sessionStorage.getItem('extractedSkills');
-    console.log('セッションストレージから取得したスキル:', extractedSkills);
-    
-    if (!extractedSkills) {
-        console.error('保存するスキルが見つかりません');
-        showError('エラー', '保存するスキルが見つかりません。', 'スキルシートを再度アップロードしてください。');
-        return;
-    }
-    
-    let skills;
-    try {
-        skills = JSON.parse(extractedSkills);
-        console.log('パースされたスキル:', skills);
-    } catch (e) {
-        console.error('スキルのパースに失敗しました:', e);
-        showError('エラー', 'スキルデータの形式が正しくありません。', 'スキルシートを再度アップロードしてください。');
-        return;
-    }
-    
-    const engineerId = document.getElementById('engineerId')?.value || '1';
-    console.log('エンジニアID:', engineerId);
-    
-    // ローディング表示
-    const saveBtn = elements.saveSkillsBtn;
-    if (!saveBtn) {
-        console.error('保存ボタンが見つかりません');
-        return;
-    }
-    
-    const originalText = saveBtn.innerHTML;
-    saveBtn.disabled = true;
-    saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>保存中...';
-    console.log('保存ボタンを無効化しました');
-    
-    // スキルをスキル名の配列に変換
-    console.log('スキルを変換します:', skills);
-    let skillNames = [];
     
     try {
-        // カテゴリ別のスキルをフラットな配列に変換
-        Object.values(skills).forEach(category => {
-            if (Array.isArray(category)) {
-                category.forEach(skill => {
-                    if (typeof skill === 'string') {
-                        skillNames.push(skill);
-                    } else if (skill && typeof skill === 'object' && skill.skill_name) {
-                        skillNames.push(skill.skill_name);
-                    }
-                });
+        const checkboxes = document.querySelectorAll('.skill-checkbox:checked');
+        const skills = [];
+        
+        // チェックされたスキルを収集
+        checkboxes.forEach(checkbox => {
+            try {
+                const skillData = JSON.parse(checkbox.dataset.skill);
+                const skill = {
+                    name: skillData.name || skillData.skill_name || '',
+                    category: skillData.category_name || skillData.category || 'その他',
+                    importance: parseFloat(skillData.importance) || 0.5,
+                    experience: skillData.experience || skillData.experience_years || 0,
+                    context: skillData.context || '',
+                    categories: Array.isArray(skillData.categories) ? skillData.categories : [],
+                    related_skills: Array.isArray(skillData.related_skills) ? skillData.related_skills : []
+                };
+                skills.push(skill);
+            } catch (e) {
+                console.error('スキルデータのパースに失敗しました:', e);
             }
         });
-        
-        // 重複を削除
-        skillNames = [...new Set(skillNames)];
-        
-        console.log('変換後のスキル名:', skillNames);
-    } catch (e) {
-        console.error('スキルの変換中にエラーが発生しました:', e);
-        showError('エラー', 'スキルデータの変換中にエラーが発生しました。', 'スキルシートを再度アップロードしてください。');
-        saveBtn.disabled = false;
-        saveBtn.innerHTML = originalText;
-        return;
-    }
-    
-    // スキルをサーバーに送信
-    console.log('APIリクエストを送信します:', {
-        engineerId: engineerId,
-        skills: skillNames
-    });
-    
-    fetch('/api/save_skills', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            engineerId: engineerId,
-            skills: skillNames
-        })
-    })
-    .then(response => {
-        console.log('APIレスポンスを受信しました。ステータスコード:', response.status);
-        if (!response.ok) {
-            console.error('APIエラーレスポンス:', response.status, response.statusText);
-            return response.text().then(text => {
-                console.error('エラーレスポンス本文:', text);
-                throw new Error(`APIリクエストが失敗しました: ${response.status} ${response.statusText}`);
-            });
+
+        if (skills.length === 0) {
+            showError('エラー', '保存するスキルが選択されていません', 'スキルを選択してから保存してください。');
+            return;
         }
-        return response.json();
-    })
-    .then(data => {
-        console.log('APIレスポンスデータ:', data);
-        if (data.status === 'success') {
-            console.log('スキルが正常に保存されました');
+
+        const engineerId = document.getElementById('engineerId')?.value || '1';
+        
+        // ローディング表示
+        const saveButton = document.getElementById('saveSkillsBtn');
+        const originalText = saveButton ? saveButton.innerHTML : '';
+        if (saveButton) {
+            saveButton.disabled = true;
+            saveButton.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>保存中...';
+        }
+
+        // APIに送信
+        const response = await fetch('/api/save_skills', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: JSON.stringify({
+                engineerId: engineerId,
+                skills: skills
+            })
+        });
+
+        const result = await response.json();
+
+        if (response.ok && result.status === 'success') {
+            showSuccess('成功', 'スキルが正常に保存されました');
+            
             // 成功メッセージを表示
-            showError('成功', 'スキルが正常に保存されました。', '案件検索に進んでください。');
-            // エラーメッセージを緑色に変更
             const errorMessage = document.getElementById('errorMessage');
             if (errorMessage) {
                 errorMessage.classList.remove('bg-red-50', 'border-red-400', 'text-red-700');
@@ -1236,48 +1196,56 @@ function saveSkills() {
                     errorIcon.classList.remove('text-red-400', 'fa-exclamation-circle');
                     errorIcon.classList.add('text-green-400', 'fa-check-circle');
                 }
+                
+                // メッセージを更新
+                const titleElement = errorMessage.querySelector('h3');
+                const messageElement = errorMessage.querySelector('div');
+                if (titleElement) titleElement.textContent = '成功';
+                if (messageElement) messageElement.textContent = 'スキルが正常に保存されました。案件検索に進んでください。';
             }
         } else {
-            console.error('APIレスポンスが成功ではありません:', data);
-            throw new Error(data.message || 'スキルの保存に失敗しました。');
+            throw new Error(result.message || 'スキルの保存に失敗しました');
         }
-    })
-    .catch(error => {
-        console.error('スキル保存中にエラーが発生しました:', error);
-        showError('エラー', 'スキルの保存中にエラーが発生しました。', error.message || '後でもう一度お試しください。');
-    })
-    .finally(() => {
-        console.log('保存処理を終了します');
-        // ボタンの状態をリセット
-        if (saveBtn) {
-            saveBtn.disabled = false;
-            saveBtn.innerHTML = originalText;
-            console.log('保存ボタンの状態をリセットしました');
+    } catch (error) {
+        console.error('スキル保存エラー:', error);
+        showError('エラー', 'スキルの保存に失敗しました', error.message || 'エラーが発生しました。もう一度お試しください。');
+    } finally {
+        // ボタンの状態を元に戻す
+        const saveButton = document.getElementById('saveSkillsBtn');
+        if (saveButton) {
+            saveButton.disabled = false;
+            saveButton.innerHTML = 'スキルを保存';
         }
-    });
+    }
 }
 
-// 初期化関数
-function initializeApp() {
-    // DOM要素を初期化
-    initElements();
+// 成功メッセージを表示する関数
+function showSuccess(title, message) {
+    const successHtml = `
+        <div class="fixed top-4 right-4 z-50 rounded-md bg-green-50 p-4 shadow-lg">
+            <div class="flex">
+                <div class="flex-shrink-0">
+                    <i class="fas fa-check-circle text-green-400"></i>
+                </div>
+                <div class="ml-3">
+                    <h3 class="text-sm font-medium text-green-800">${title}</h3>
+                    <div class="mt-1 text-sm text-green-700">
+                        <p>${message}</p>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+
+    // メッセージを表示
+    document.body.insertAdjacentHTML('beforeend', successHtml);
     
-    // ドラッグ＆ドロップの初期化
-    initDragAndDrop();
-    
-    // 各種ボタンのイベントリスナーを設定
-    setupBackButton();
-    setupFindProjectsButton();
-    
-    // スキル保存ボタンのイベントリスナーを設定
-    if (elements.saveSkillsBtn) {
-        elements.saveSkillsBtn.addEventListener('click', saveSkills);
-    }
-    
-    // Gmail認証状態を確認
-    if (typeof checkGmailAuthStatus === 'function') {
-        checkGmailAuthStatus();
-    }
+    // 5秒後にメッセージを削除
+    setTimeout(() => {
+        const successElement = document.querySelector('.bg-green-50');
+        if (successElement) {
+            successElement.remove();
+        }
+    }, 5000);
 }
 
 // メール詳細ボタンのクリックイベントを委譲
@@ -1297,6 +1265,365 @@ document.addEventListener('click', function(event) {
 // DOMの読み込みが完了したら初期化を実行
 document.addEventListener('DOMContentLoaded', initializeApp);
 
+// エラーメッセージを表示する関数
+function showError(title, message, details = '') {
+    console.error(`${title}: ${message}`, details);
+    
+    const errorMessage = document.getElementById('errorMessage');
+    if (!errorMessage) return;
+    
+    // エラーメッセージ要素を表示
+    errorMessage.classList.remove('hidden');
+    errorMessage.classList.remove('bg-green-50', 'border-green-400', 'text-green-700');
+    errorMessage.classList.add('bg-red-50', 'border-red-400', 'text-red-700');
+    
+    // アイコンを設定
+    const errorIcon = document.getElementById('errorIcon');
+    if (errorIcon) {
+        errorIcon.className = 'fas fa-exclamation-circle text-red-400';
+    }
+    
+    // タイトルとメッセージを設定
+    const titleElement = errorMessage.querySelector('h3');
+    const messageElement = errorMessage.querySelector('div');
+    const errorText = document.getElementById('errorText');
+    const errorList = document.getElementById('errorList');
+    
+    if (titleElement) titleElement.textContent = title;
+    if (messageElement) messageElement.textContent = message;
+    
+    // 詳細がある場合は表示
+    if (details) {
+        if (Array.isArray(details)) {
+            errorList.innerHTML = details.map(detail => `<li>${detail}</li>`).join('');
+        } else if (typeof details === 'string') {
+            errorText.textContent = details;
+        }
+    }
+    
+    // 5秒後に自動的に非表示にする
+    setTimeout(() => {
+        errorMessage.classList.add('hidden');
+    }, 10000);
+}
+
+// 成功メッセージを表示する関数
+function showSuccess(title, message) {
+    console.log(`${title}: ${message}`);
+    
+    const errorMessage = document.getElementById('errorMessage');
+    if (!errorMessage) return;
+    
+    // 成功メッセージ要素を表示
+    errorMessage.classList.remove('hidden');
+    errorMessage.classList.remove('bg-red-50', 'border-red-400', 'text-red-700');
+    errorMessage.classList.add('bg-green-50', 'border-green-400', 'text-green-700');
+    
+    // アイコンを設定
+    const errorIcon = document.getElementById('errorIcon');
+    if (errorIcon) {
+        errorIcon.className = 'fas fa-check-circle text-green-400';
+    }
+    
+    // タイトルとメッセージを設定
+    const titleElement = errorMessage.querySelector('h3');
+    const messageElement = errorMessage.querySelector('div');
+    const errorText = document.getElementById('errorText');
+    const errorList = document.getElementById('errorList');
+    
+    if (titleElement) titleElement.textContent = title;
+    if (messageElement) messageElement.textContent = message;
+    
+    // エラーリストをクリア
+    if (errorList) errorList.innerHTML = '';
+    if (errorText) errorText.textContent = '';
+    
+    // 5秒後に自動的に非表示にする
+    setTimeout(() => {
+        errorMessage.classList.add('hidden');
+    }, 5000);
+}
+
+// スキル抽出結果を表示する関数
+function showResults(skills, extractedText = '') {
+    try {
+        console.log('スキル抽出結果を表示します:', skills);
+        
+        const skillsByCategory = document.getElementById('skillsByCategory');
+        const textPreview = document.getElementById('textPreview');
+        
+        if (!skillsByCategory) {
+            console.error('スキル表示用の要素が見つかりません');
+            return;
+        }
+        
+        // テキストプレビューを更新
+        if (textPreview) {
+            textPreview.textContent = extractedText || 'テキストを抽出できませんでした。';
+        }
+        
+        // スキルをカテゴリごとに表示
+        skillsByCategory.innerHTML = '';
+        
+        // スキルがオブジェクトの配列の場合（バックエンドの応答形式に応じて調整）
+        if (Array.isArray(skills)) {
+            // スキルをカテゴリごとにグループ化
+            const categories = {};
+            
+            skills.forEach(skill => {
+                const category = skill.category || 'その他';
+                if (!categories[category]) {
+                    categories[category] = [];
+                }
+                categories[category].push(skill);
+            });
+            
+            // カテゴリごとに表示
+            Object.entries(categories).forEach(([category, skills]) => {
+                const categoryElement = document.createElement('div');
+                categoryElement.className = 'mb-6';
+                categoryElement.innerHTML = `
+                    <h4 class="text-md font-medium text-gray-800 mb-2">${category}</h4>
+                    <div class="flex flex-wrap gap-2">
+                        ${skills.map(skill => `
+                            <label class="inline-flex items-center bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1 text-sm font-medium text-gray-700 cursor-pointer">
+                                <input type="checkbox" 
+                                       class="form-checkbox h-4 w-4 text-blue-600 rounded mr-2 skill-checkbox"
+                                       data-skill='${JSON.stringify(skill).replace(/'/g, '&#39;')}'
+                                       checked>
+                                ${skill.name || skill.skill_name}
+                            </label>
+                        `).join('')}
+                    </div>
+                `;
+                skillsByCategory.appendChild(categoryElement);
+            });
+        } 
+        // スキルがカテゴリ別のオブジェクトの場合
+        else if (typeof skills === 'object' && skills !== null) {
+            Object.entries(skills).forEach(([category, skillList]) => {
+                if (!Array.isArray(skillList) || skillList.length === 0) return;
+                
+                const categoryElement = document.createElement('div');
+                categoryElement.className = 'mb-6';
+                categoryElement.innerHTML = `
+                    <h4 class="text-md font-medium text-gray-800 mb-2">${category}</h4>
+                    <div class="flex flex-wrap gap-2">
+                        ${skillList.map(skill => `
+                            <label class="inline-flex items-center bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1 text-sm font-medium text-gray-700 cursor-pointer">
+                                <input type="checkbox" 
+                                       class="form-checkbox h-4 w-4 text-blue-600 rounded mr-2 skill-checkbox"
+                                       data-skill='${JSON.stringify(skill).replace(/'/g, '&#39;')}'
+                                       checked>
+                                ${skill.name || skill.skill_name}
+                            </label>
+                        `).join('')}
+                    </div>
+                `;
+                skillsByCategory.appendChild(categoryElement);
+            });
+        }
+        
+        // 結果セクションを表示
+        document.getElementById('resultSection').classList.remove('hidden');
+        document.getElementById('resultSection').scrollIntoView({ behavior: 'smooth' });
+        
+    } catch (error) {
+        console.error('スキル表示中にエラーが発生しました:', error);
+        showError('エラー', 'スキルの表示中にエラーが発生しました', error.message);
+    }
+}
+
+// ファイルアップロードを処理する関数
+async function handleFileUpload(event) {
+    event.preventDefault();
+    
+    const fileInput = document.getElementById('fileInput');
+    const file = fileInput.files[0];
+    const engineerId = document.getElementById('engineerId').value || '1';
+    
+    if (!file) {
+        showError('エラー', 'ファイルが選択されていません', 'ファイルを選択してからアップロードしてください。');
+        return;
+    }
+    
+    // ファイルサイズの確認（10MBまで）
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    if (file.size > maxSize) {
+        showError('エラー', 'ファイルサイズが大きすぎます', '10MB以下のファイルをアップロードしてください。');
+        return;
+    }
+    
+    // ファイル形式の確認
+    const allowedTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+    if (!allowedTypes.includes(file.type)) {
+        showError('エラー', 'サポートされていないファイル形式です', 'PDFまたはWord形式のファイルをアップロードしてください。');
+        return;
+    }
+    
+    // フォームデータを作成
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('engineerId', engineerId);
+    
+    // ローディング表示
+    const uploadBtn = document.getElementById('uploadBtn');
+    const originalBtnText = uploadBtn ? uploadBtn.innerHTML : '';
+    if (uploadBtn) {
+        uploadBtn.disabled = true;
+        uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>処理中...';
+    }
+    
+    // アップロード進捗を表示
+    document.getElementById('uploadProgress').classList.remove('hidden');
+    const progressBar = document.getElementById('progressBar');
+    
+    try {
+        // APIにアップロード
+        const response = await fetch('/api/upload', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            console.log('アップロード成功:', result);
+            
+            // スキル抽出結果を表示
+            if (result.skills) {
+                showResults(result.skills, result.extracted_text || '');
+            } else {
+                showError('エラー', 'スキルの抽出に失敗しました', 'スキル情報が見つかりませんでした。');
+            }
+        } else {
+            throw new Error(result.message || 'ファイルのアップロード中にエラーが発生しました');
+        }
+    } catch (error) {
+        console.error('アップロードエラー:', error);
+        showError('エラー', 'ファイルのアップロードに失敗しました', error.message || 'エラーが発生しました。もう一度お試しください。');
+    } finally {
+        // ボタンの状態を元に戻す
+        if (uploadBtn) {
+            uploadBtn.disabled = false;
+            uploadBtn.innerHTML = originalBtnText;
+        }
+        // プログレスバーを非表示に
+        document.getElementById('uploadProgress').classList.add('hidden');
+        if (progressBar) {
+            progressBar.style.width = '0%';
+        }
+    }
+}
+
+// アプリケーションの初期化
+function initializeApp() {
+    console.log('アプリケーションを初期化しています...');
+    
+    // ドラッグ＆ドロップの初期化
+    initDragAndDrop();
+    
+    // 保存ボタンのイベントリスナーを設定
+    const saveButton = document.getElementById('saveSkillsBtn');
+    if (saveButton) {
+        saveButton.addEventListener('click', function(e) {
+            e.preventDefault();
+            saveSkills();
+        });
+    }
+    
+    // "案件を探す" ボタンのイベントリスナーを設定
+    const findProjectsBtn = document.getElementById('findProjectsBtn');
+    if (findProjectsBtn) {
+        findProjectsBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            // エンジニアIDをクエリに付加して案件検索ページへ遷移
+            const engineerId = document.getElementById('engineerId')?.value || '1';
+            window.location.href = `/projects?engineerId=${encodeURIComponent(engineerId)}`;
+        });
+    }
+    
+    // アップロードフォームの送信イベントを設定
+    const uploadForm = document.getElementById('uploadForm');
+    if (uploadForm) {
+        uploadForm.addEventListener('submit', handleFileUpload);
+    }
+    
+    // 戻るボタンのイベントリスナーを設定
+    const backToUpload = document.getElementById('backToUpload');
+    if (backToUpload) {
+        backToUpload.addEventListener('click', function(e) {
+            e.preventDefault();
+            document.getElementById('resultSection').classList.add('hidden');
+            document.getElementById('uploadForm').reset();
+            document.getElementById('fileInfo').classList.add('hidden');
+            document.getElementById('uploadProgress').classList.add('hidden');
+        });
+    }
+    
+    // ファイル入力の変更を監視
+    const fileInput = document.getElementById('fileInput');
+    if (fileInput) {
+        fileInput.addEventListener('change', function() {
+            if (this.files && this.files[0]) {
+                const fileName = this.files[0].name;
+                document.getElementById('fileName').textContent = fileName;
+                document.getElementById('fileInfo').classList.remove('hidden');
+            }
+        });
+    }
+    
+    // ドラッグ＆ドロップのイベントリスナーを設定
+    const dropZone = document.getElementById('dropZone');
+    if (dropZone) {
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight() {
+            dropZone.classList.add('border-blue-500', 'bg-blue-50');
+        }
+
+        function unhighlight() {
+            dropZone.classList.remove('border-blue-500', 'bg-blue-50');
+        }
+
+        dropZone.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            
+            if (files.length) {
+                const fileInput = document.getElementById('fileInput');
+                if (fileInput) {
+                    fileInput.files = files;
+                    const event = new Event('change');
+                    fileInput.dispatchEvent(event);
+                }
+            }
+        }
+    }
+}
+
 // グローバルスコープに公開
 window.initDragAndDrop = initDragAndDrop;
 window.viewEmail = viewEmail;
+
+// ページ読み込み完了後に初期化を実行
+document.addEventListener('DOMContentLoaded', function() {
+    initializeApp();
+});
