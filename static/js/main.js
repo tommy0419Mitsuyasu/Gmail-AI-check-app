@@ -750,85 +750,48 @@ async function searchMatchingProjects(skills) {
             <div class="flex justify-center items-center p-8">
                 <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
                 <span class="ml-4 text-gray-600">案件を検索中...</span>
-            </div>`;
-        resultsContainer.classList.remove('hidden');
+            </div>
+        `;
     }
     
     try {
-        console.log('Gmailからメールを検索します', { skills });
-        
-        // 現在の日付と2日前の日付を取得
-        const now = new Date();
-        const twoDaysAgo = new Date(now);
-        twoDaysAgo.setDate(now.getDate() - 2);
-        
-        // 日付をYYYY/MM/DD形式にフォーマット
-        const formatDate = (date) => {
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            return `${year}/${month}/${day}`;
-        };
-        
-        const dateQuery = `after:${formatDate(twoDaysAgo)}`;
-        const searchQuery = `to:sales@artwize.co.jp ${dateQuery} ${skills.join(' OR ')}`;
-        
-        console.log('検索クエリ:', searchQuery);
-        
-        // Gmailを検索
-        const response = await fetch('/search_gmail', {
+        // APIリクエスト（POSTでskillsを送信）
+        const response = await fetch('/api/match_projects', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                query: searchQuery,
-                maxResults: 10
-            })
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ skills })
         });
         
-        console.log('APIレスポンスを受信しました', { status: response.status });
-        
+        const data = await response.json();
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            const errorMsg = errorData.message || 'Gmailの検索中にエラーが発生しました';
-            console.error('APIエラー:', { status: response.status, errorData });
+            const errorMsg = data.message || '案件の検索中にエラーが発生しました';
             throw new Error(errorMsg);
         }
         
-        const data = await response.json();
-        console.log('Gmail検索結果:', data);
-        
-        if (data.status === 'success' && data.emails && data.emails.length > 0) {
-            // メールを案件形式に変換
-            const projects = data.emails.map(email => ({
-                id: email.id,
-                name: email.subject,
-                client_name: email.from,
-                date: email.date,
-                snippet: email.snippet,
+        if (data.status === 'success' && data.matches && data.matches.length > 0) {
+            // 案件を案件形式に変換
+            const projects = data.matches.map(project => ({
+                ...project,
                 source: 'gmail',
-                matched_skills: skills.filter(skill => 
-                    email.snippet.toLowerCase().includes(skill.toLowerCase()) ||
-                    email.subject.toLowerCase().includes(skill.toLowerCase())
+                matched_skills: skills.filter(skill =>
+                    (project.description || '').toLowerCase().includes(skill.toLowerCase()) ||
+                    (project.title || '').toLowerCase().includes(skill.toLowerCase())
                 ),
                 match_count: 0, // 後で計算
                 match_percentage: 0 // 後で計算
             }));
-            
             // マッチ率を計算
             projects.forEach(project => {
                 project.match_count = project.matched_skills.length;
                 project.match_percentage = Math.min(project.match_count * 20, 100); // 1スキルあたり最大20%
             });
-            
             // マッチ率でソート
             projects.sort((a, b) => b.match_percentage - a.match_percentage);
-            
             console.log('案件を表示します', { count: projects.length });
             displayProjects(projects, skills);
         } else {
-            console.log('該当するメールは見つかりませんでした');
+            console.log('該当する案件は見つかりませんでした');
             if (resultsContainer) {
                 resultsContainer.innerHTML = `
                     <div class="text-center py-12">
@@ -844,10 +807,8 @@ async function searchMatchingProjects(skills) {
             message: error.message,
             stack: error.stack
         });
-        
         const errorMessage = error.message || '案件の検索中にエラーが発生しました';
         showError('検索エラー', errorMessage);
-        
         if (resultsContainer) {
             resultsContainer.innerHTML = `
                 <div class="p-4 bg-red-50 text-red-700 rounded">

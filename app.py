@@ -1102,7 +1102,7 @@ def auth_status():
         return jsonify({'authenticated': False, 'message': 'Not authenticated'})
     
     try:
-        credentials = Credentials(**session['credentials'])
+        credentials = get_credentials_from_session()
         if not credentials.valid:
             return jsonify({'authenticated': False, 'message': 'Token expired'})
         return jsonify({'authenticated': True, 'message': 'Authenticated'})
@@ -1110,16 +1110,37 @@ def auth_status():
         return jsonify({'authenticated': False, 'message': str(e)})
 
 def get_date_days_ago(days):
-    """指定日数前の日付をYYYY/MM/DD形式で返す"""
+    """指定日数前の日付をdatetimeオブジェクトで返す"""
     from datetime import datetime, timedelta
-    date = datetime.now() - timedelta(days=days)
-    return date.strftime('%Y/%m/%d')
+    return datetime.now() - timedelta(days=days)
+
+
+def get_credentials_from_session() -> Credentials:
+    """セッションに保存されている資格情報を安全に復元するヘルパー関数"""
+    from datetime import datetime
+    creds_dict = session.get('credentials')
+    if not creds_dict:
+        raise RuntimeError('Gmail credentials not found in session')
+    # 文字列の場合は datetime に変換
+    if isinstance(creds_dict.get('expiry'), str):
+        try:
+            creds_dict = creds_dict.copy()
+            creds_dict['expiry'] = datetime.fromisoformat(creds_dict['expiry'])
+        except Exception:
+            # パースできない場合は expiry を削除して後続でリフレッシュさせる
+            creds_dict.pop('expiry', None)
+    return Credentials(**creds_dict)
 
 def search_gmail_emails(service, skills, normalized_skills):
     """Gmailからメールを検索して案件情報を返す"""
     try:
         # 検索クエリを作成
-        query_parts = [f'to:sales@artwize.co.jp', f'after:{get_date_days_ago(2)}']
+        date_str = get_date_days_ago(2).strftime('%Y/%m/%d')
+        query_parts = [
+            f'(from:sales@artwize.co.jp OR to:sales@artwize.co.jp OR cc:sales@artwize.co.jp)',
+            f'after:{date_str}',
+            '(案件 OR 求人 OR 募集 OR プロジェクト)'
+        ]
         if skills:
             query_parts.append(f"({' OR '.join(skills)})")
         
@@ -1135,20 +1156,32 @@ def search_gmail_emails(service, skills, normalized_skills):
         messages = results.get('messages', [])
         projects = []
         
+        print(f"[API] Gmail検索クエリ: {query}")
+        print(f"[API] 該当メッセージ数: {len(messages)}")
+        
         for msg in messages:
             try:
-                # メールの詳細を取得
+                # メールの詳細を取得（本文も含める）
                 message = service.users().messages().get(
                     userId='me',
                     id=msg['id'],
-                    format='metadata',
-                    metadataHeaders=['subject', 'from', 'date']
+                    format='full'
                 ).execute()
                 
                 # メタデータから必要な情報を抽出
                 headers = {}
                 for header in message.get('payload', {}).get('headers', []):
                     headers[header['name'].lower()] = header['value']
+                
+                # メール本文を取得
+                email_body = ''
+                payload = message.get('payload', {})
+                if 'parts' in payload:
+                    for part in payload['parts']:
+                        if part['mimeType'] == 'text/plain' and 'body' in part and 'data' in part['body']:
+                            email_body += base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+                elif 'body' in payload and 'data' in payload['body']:
+                    email_body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
                 
                 # 受信日時をフォーマット
                 email_date = headers.get('date', '')
@@ -1165,13 +1198,15 @@ def search_gmail_emails(service, skills, normalized_skills):
                     'client_name': headers.get('from', '送信者不明'),
                     'date': email_date,
                     'snippet': message.get('snippet', ''),
+                    'body': email_body,
                     'source': 'gmail'
                 }
                 
-                # スキルマッチング情報を追加
-                project['matched_skills'] = [s for s in normalized_skills if s.lower() in project['snippet'].lower()]
+                # スキルマッチング情報を追加（件名と本文の両方でマッチング）
+                search_text = f"{project['name']} {project['snippet']} {email_body}"
+                project['matched_skills'] = [s for s in normalized_skills if s.lower() in search_text.lower()]
                 project['match_count'] = len(project['matched_skills'])
-                project['match_score'] = project['match_count']  # 単純にマッチ数を使用
+                project['match_score'] = project['match_count']
                 project['match_percentage'] = min(project['match_count'] * 20, 100)  # 1スキルあたり20%と仮定
                 
                 projects.append(project)
@@ -1246,6 +1281,11 @@ def save_skills():
             ''', (engineer_id, skills_str))
         
         conn.commit()
+        
+        # セッションにも保存（大文字化して後続のフィルタで使いやすくする）
+        session['skills'] = [s.upper() for s in processed_skills]
+        session.modified = True
+        app.logger.debug(f"セッションskills更新: {session['skills']}")
         
         return jsonify({
             'status': 'success',
@@ -1429,7 +1469,7 @@ def get_emails():
         return jsonify({'error': 'Gmail認証が必要です'}), 401
     
     try:
-        credentials = Credentials(**session['credentials'])
+        credentials = get_credentials_from_session()
         service = build('gmail', 'v1', credentials=credentials)
         
         # 過去7日間のメールを取得
@@ -1465,8 +1505,8 @@ def get_emails():
             'message': str(e)
         }), 500
 
-@app.route('/api/projects', methods=['GET'])
-def search_projects():
+@app.route('/api/projects_db', methods=['GET'])
+def search_projects_db():
     """プロジェクトを検索する"""
     try:
         # クエリパラメータを取得
@@ -1599,7 +1639,7 @@ def get_email_detail(email_id):
         return jsonify({'error': 'Gmail認証が必要です'}), 401
     
     try:
-        credentials = Credentials(**session['credentials'])
+        credentials = get_credentials_from_session()
         service = build('gmail', 'v1', credentials=credentials)
         
         # メールの詳細を取得
@@ -1655,60 +1695,81 @@ def get_email_detail(email_id):
         }), 500
 
 # 既存のmatch_projects関数はそのまま残す
-@app.route('/api/match_projects', methods=['GET'])
+@app.route('/api/match_projects', methods=['POST'])
 def match_projects():
-    """スキルに基づいてエンジニアと案件をマッチングする"""
+    """スキルに基づいて案件を検索するAPIエンドポイント"""
     if 'credentials' not in session:
-        return jsonify({'error': 'Gmail認証が必要です'}), 401
-    
+        return jsonify({'status': 'error', 'message': 'Gmail認証が必要です'}), 401
+        
     try:
-        credentials = Credentials(**session['credentials'])
+        data = request.get_json() or {}
+        skills = data.get('skills', [])
+        
+        # デバッグ用ログ
+        print(f"[API] リクエスト受信 - スキル: {skills}")
+        
+        if not skills:
+            return jsonify({
+                'status': 'error',
+                'message': 'スキルが指定されていません'
+            }), 400
+        
+        # Gmailサービスを初期化
+        credentials = get_credentials_from_session()
         service = build('gmail', 'v1', credentials=credentials)
         
-        # 過去2日間のメールを取得
-        emails = get_recent_sales_emails(service, days=2)
-        results = []
+        # スキルでGmail案件を検索
+        print(f"[API] Gmailから案件を検索中...")
+        projects = search_gmail_emails(service, skills, skills)
+        print(f"[API] 検索完了 - ヒット件数: {len(projects)}")
         
-        for email in emails:
-            # メールの詳細を取得
-            email_info = extract_email_info(service, email['id'])
+        # 結果を整形
+        results = []
+        for project in projects:
+            # マッチしたスキルをハイライト
+            matched_skills = project.get('matched_skills', [])
+            match_count = project.get('match_count', 0)
+            match_percentage = project.get('match_percentage', 0)
             
-            # メール本文からスキルを抽出
-            required_skills = extract_skills_from_email(email_info['body'])
-            if not required_skills:
-                continue
-                
-            # スキルに基づいてマッチするエンジニアを検索
-            matched_engineers = find_matching_engineers(required_skills)
+            print(f"[API] 案件: {project.get('name', 'No Title')}, マッチスキル: {matched_skills}, スコア: {match_percentage}%")
             
-            # 結果に追加
-            results.append({
-                'email_id': email['id'],
-                'email': {
-                    'subject': email_info['subject'],
-                    'from': email_info['from'],
-                    'date': email_info['date'],
-                    'snippet': email_info['body'][:200] + '...' if len(email_info['body']) > 200 else email_info['body']
-                },
-                'required_skills': required_skills,
-                'matched_engineers': matched_engineers
-            })
+            # 必要な情報のみを抽出
+            result = {
+                'id': project.get('id'),
+                'title': project.get('name', '件名なし'),
+                'from': project.get('client_name', '送信者不明'),
+                'date': project.get('date', ''),
+                'snippet': project.get('snippet', ''),
+                'matched_skills': matched_skills,
+                'match_count': match_count,
+                'match_percentage': match_percentage
+            }
+            results.append(result)
+        
+        # マッチ率の高い順にソート
+        results.sort(key=lambda x: x.get('match_percentage', 0), reverse=True)
         
         return jsonify({
             'status': 'success',
-            'matches': results
+            'matches': results,
+            'total': len(results),
+            'query': {
+                'skills': skills,
+                'search_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
         })
         
     except Exception as e:
-        print(f'Error in match_projects: {str(e)}')
+        error_msg = f'案件の検索中にエラーが発生しました: {str(e)}'
+        print(f'[API] エラー: {error_msg}')
+        print(traceback.format_exc())
+        
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': error_msg,
+            'error_type': str(type(e).__name__),
+            'traceback': traceback.format_exc() if app.debug else None
         }), 500
-        
-        # 過去2日間のメールを取得
-        emails = get_recent_sales_emails(service, days=2)
-        results = []
         
         for email in emails:
             email_info = extract_email_info(service, email['id'])
@@ -1750,6 +1811,7 @@ def view_matches():
 def get_projects_api():
     """
     Gmailから案件情報を取得して検索・並び替えができるAPIエンドポイント
+    sales@artwize.co.jp に送信されたメールから案件を取得する
     
     クエリパラメータ:
     - q: 検索クエリ（件名・本文から検索）
@@ -1760,6 +1822,10 @@ def get_projects_api():
     - days: 何日前までのメールを取得するか（デフォルト: 30日）
     """
     try:
+        # セッションから認証情報を確認
+        if 'credentials' not in session:
+            return jsonify({'status': 'error', 'message': 'Gmail認証が必要です'}), 401
+            
         # クエリパラメータを取得
         search_query = request.args.get('q', '').lower()
         sort_by = request.args.get('sort', 'date')
@@ -1768,56 +1834,94 @@ def get_projects_api():
         skills_param = request.args.get('skills', '')
         days = int(request.args.get('days', 30))
         
-        # スキルフィルターを処理
-        skills_filter = [s.strip().upper() for s in skills_param.split(',')] if skills_param else []
+        # スキルフィルターを処理（セッションのスキルとクエリパラメータのスキルをマージ）
+        session_skills = session.get('skills', [])
+        param_skills = [s.strip().upper() for s in skills_param.split(',')] if skills_param else []
+        skills_filter = list(set(session_skills + param_skills))  # 重複を削除
         
-        # Gmail APIを使用してメールを取得
-        if 'credentials' not in session:
-            return jsonify({'error': 'Gmail認証が必要です'}), 401
-            
-        credentials = Credentials(**session['credentials'])
+        # Gmailサービスを初期化
+        credentials = get_credentials_from_session()
         service = build('gmail', 'v1', credentials=credentials)
         
-        # メールを取得
-        emails = get_recent_sales_emails(service, days=days, max_results=50)
+        # 検索クエリを構築
+        date_str = get_date_days_ago(days).strftime('%Y/%m/%d')
+        query_parts = [
+            f'(from:sales@artwize.co.jp OR to:sales@artwize.co.jp OR cc:sales@artwize.co.jp)',
+            f'after:{date_str}',
+            '(案件 OR 求人 OR 募集 OR プロジェクト)'
+        ]
+        if search_query:
+            query_parts.append(f'subject:{search_query} OR {search_query}')
+        if skills_filter:
+            query_parts.append(f"({' OR '.join(skills_filter)})")
+            
+        query = ' '.join(query_parts)
+        print(f"[API] Gmail検索クエリ: {query}")
+        
+        # Gmailからメールを検索
+        try:
+            results = service.users().messages().list(
+                userId='me',
+                q=query,
+                maxResults=50
+            ).execute()
+            messages = results.get('messages', [])
+            print(f"[API] 該当メッセージ数: {len(messages)}")
+        except Exception as e:
+            print(f"[API] Gmail検索エラー: {str(e)}")
+            messages = []
         
         projects = []
         
-        for email in emails:
+        for msg in messages:
             try:
-                # メタデータから情報を抽出
+                # メールの詳細を取得
+                message = service.users().messages().get(
+                    userId='me',
+                    id=msg['id'],
+                    format='full'
+                ).execute()
+                
+                # メールヘッダーから基本情報を抽出
                 headers = {}
-                for header in email.get('payload', {}).get('headers', []):
+                for header in message.get('payload', {}).get('headers', []):
                     headers[header['name'].lower()] = header['value']
                 
                 # 件名を取得
                 subject = headers.get('subject', '（件名なし）')
                 
-                # メール本文は取得済みの場合はそのまま使用、なければ空文字列
-                body = email.get('snippet', '')
+                # メール本文を抽出
+                email_body = ''
+                payload = message.get('payload', {})
+                if 'parts' in payload:
+                    for part in payload['parts']:
+                        if part['mimeType'] == 'text/plain' and 'body' in part and 'data' in part['body']:
+                            email_body += base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+                elif 'body' in payload and 'data' in payload['body']:
+                    email_body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+                
+                # スニペットを取得（本文の先頭200文字）
+                snippet = email_body[:200] + '...' if len(email_body) > 200 else email_body
                 
                 # 日付を取得してフォーマット
                 date_str = headers.get('date', '')
                 try:
                     from email.utils import parsedate_to_datetime
                     parsed_date = parsedate_to_datetime(date_str)
-                    formatted_date = parsedatedate.isoformat()
+                    formatted_date = parsed_date.isoformat()
                     timestamp = parsed_date.timestamp()
                 except (TypeError, ValueError):
                     # 日付のパースに失敗した場合は現在時刻を使用
                     parsed_date = datetime.utcnow()
                     formatted_date = parsed_date.isoformat()
                     timestamp = parsed_date.timestamp()
-                    
+                
                 # 送信者情報を取得
                 from_email = headers.get('from', '送信者不明')
                 
-                # スニペット（本文の一部）を取得
-                snippet = email.get('snippet', '')[:200] + '...' if len(email.get('snippet', '')) > 200 else email.get('snippet', '')
-                
                 # 給与情報を抽出（正規表現で数値を検索）
                 salary = 0
-                salary_match = re.search(r'(給与|年収|報酬|単価)[:：]?\s*([\d,]+)[\s-~]*([\d,]*)', subject + ' ' + body)
+                salary_match = re.search(r'(給与|年収|報酬|単価)[:：]?\s*([\d,]+)[\s\-~]*([\d,]*)', subject + ' ' + email_body)
                 if salary_match:
                     try:
                         # 数値を抽出して平均を計算
@@ -1834,37 +1938,49 @@ def get_projects_api():
                     continue
                 
                 # 勤務地を抽出
-                location_match = re.search(r'勤務地[：:]([^\n]+)', body)
+                location_match = re.search(r'勤務地[：:]([^\n]+)', email_body)
                 location = location_match.group(1).strip() if location_match else '未記載'
                 
                 # スキルを抽出
-                skills_match = re.findall(r'[A-Za-z0-9+#.]+', (subject + ' ' + body).upper())
-                valid_skills = list(set([s for s in skills_match if s in SKILL_KEYWORDS]))
+                email_content = f"{subject} {email_body}".upper()
+                matched_skills = []
                 
-                # スキルフィルターが指定されている場合はマッチングを確認
-                if skills_filter and not any(skill in valid_skills for skill in skills_filter):
+                # セッションのスキルとパラメータのスキルの両方でマッチング
+                for skill in skills_filter:
+                    if skill.upper() in email_content:
+                        matched_skills.append(skill)
+                
+                # スキルが1つもマッチしない場合はスキップ（スキルフィルターが指定されている場合）
+                if skills_filter and not matched_skills:
                     continue
-                    
+                
+                # マッチ率を計算
+                match_count = len(matched_skills)
+                match_percentage = int((match_count / len(skills_filter)) * 100) if skills_filter else 0
+                
                 # プロジェクトオブジェクトを作成
                 project = {
-                    'id': email['id'],
-                    'threadId': email.get('threadId', ''),
+                    'id': msg['id'],
+                    'title': subject or '無題の案件',
                     'subject': subject,
                     'snippet': snippet,
-                    'date': formatted_date,
-                    'timestamp': timestamp,
+                    'description': snippet,
+                    'created_at': formatted_date,
                     'from': from_email,
                     'salary': salary,
                     'location': location,
-                    'body': body[:500] + '...' if len(body) > 500 else body,
-                    'skills': valid_skills,
-                    'match_count': len(valid_skills)
+                    'body': email_body[:500] + '...' if len(email_body) > 500 else email_body,
+                    'matched_skills': matched_skills,
+                    'match_count': match_count,
+                    'match_percentage': match_percentage,
+                    'timestamp': timestamp,
+                    'thread_id': message.get('threadId')
                 }
                 
                 projects.append(project)
                 
             except Exception as e:
-                print(f"Error processing email {email.get('id', 'unknown')}: {str(e)}")
+                print(f"[API] メール処理エラー (ID: {msg.get('id', 'unknown')}): {str(e)}")
                 continue
         
         # ソート処理
@@ -1873,95 +1989,136 @@ def get_projects_api():
         elif sort_by == 'salary':
             projects.sort(key=lambda x: x.get('salary', 0), reverse=True)
         elif sort_by == 'relevance':
-            # 関連性でソート（マッチしたスキル数が多い順）
-            projects.sort(key=lambda x: x.get('match_count', 0), reverse=True)
-        
-        # ソート処理
-        if sort_by == 'date':
-            projects.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
-        elif sort_by == 'salary':
-            projects.sort(key=lambda x: x.get('salary', 0), reverse=True)
-        elif sort_by == 'relevance':
-            # 関連度でソート（検索クエリとの一致度）
-            def relevance_score(p):
-                if not search_query:
-                    return 0
-                    
-                score = 0
-                query = search_query.lower()
-                
-                # 件名でのマッチング（重み付け高め）
-                if 'subject' in p and query in p['subject'].lower():
-                    score += 3
-                
-                # 本文でのマッチング
-                if 'body' in p and query in p['body'].lower():
-                    score += 1
-                    
-                # スキルでのマッチング（完全一致）
-                if 'skills' in p and any(query == skill.lower() for skill in p['skills']):
-                    score += 2
-                    
-                return -score  # 降順ソートのため負の値を返す
-            
-            # 関連度スコアでソート
-            projects.sort(key=relevance_score)
-            
-            # 関連度が同じ場合は日付の新しい順にソート
-            projects.sort(key=lambda x: (relevance_score(x), x.get('timestamp', 0)), reverse=True)
+            # 関連度が高い順（マッチ率の高い順）にソート
+            projects.sort(key=lambda x: (x.get('match_percentage', 0), x.get('timestamp', 0)), reverse=True)
         
         return jsonify({
             'status': 'success',
             'data': projects,
-            'total': len(projects)
+            'total': len(projects),
+            'query': {
+                'search_query': search_query,
+                'skills': skills_filter,
+                'days': days
+            }
         })
         
     except Exception as e:
-        app.logger.error(f'Error in get_projects_api: {str(e)}', exc_info=True)
+        error_msg = f'案件の検索中にエラーが発生しました: {str(e)}'
+        app.logger.error(f'[API] エラー: {error_msg}', exc_info=True)
         return jsonify({
             'status': 'error',
-            'message': f'プロジェクトの取得中にエラーが発生しました: {str(e)}'
+            'message': error_msg,
+            'error_type': str(type(e).__name__)
         }), 500
 
 @app.route('/projects', methods=['GET'])
 def get_projects():
     """
     プロジェクト一覧ページを表示する
+    スキルシートに基づいて sales@artwize.co.jp に送信されたメールから案件を検索して表示
     """
-    conn = None
     try:
-        conn = get_db()
-        c = conn.cursor()
+        # セッションから認証情報を取得
+        if 'credentials' not in session:
+            return redirect(url_for('gmail_auth'))
+            
+        # セッションからスキルを取得（必須）
+        skills = session.get('skills')
+        if not skills:
+            return render_template('projects.html',
+                               projects=[],
+                               error_message='スキルシートがアップロードされていません。まずはスキルシートをアップロードしてください。')
         
-        # プロジェクトと必要なスキルを取得
-        c.execute('''
-            SELECT p.*, 
-                   GROUP_CONCAT(DISTINCT pr.skill) as required_skill_names
-            FROM projects p
-            LEFT JOIN project_requirements pr ON p.id = pr.project_id
-            GROUP BY p.id
-            ORDER BY p.created_at DESC
-        ''')
+        # Gmailサービスを初期化
+        credentials = get_credentials_from_session()
+        service = build('gmail', 'v1', credentials=credentials)
         
+        # デバッグ用ログ
+        print(f"[プロジェクト検索] スキル: {skills}")
+        
+        # スキルでGmail案件を検索（to:sales@artwize.co.jp でフィルタリング）
+        query_parts = [f'to:sales@artwize.co.jp', f'after:{get_date_days_ago(30)}']
+        if skills:
+            query_parts.append(f"({' OR '.join(skills)})")
+        
+        query = ' '.join(query_parts)
+        print(f"[プロジェクト検索] Gmail検索クエリ: {query}")
+        
+        # Gmailからメールを検索
+        results = service.users().messages().list(
+            userId='me',
+            q=query,
+            maxResults=50
+        ).execute()
+        
+        messages = results.get('messages', [])
+        print(f"[プロジェクト検索] 該当メッセージ数: {len(messages)}")
+        
+        # メッセージから案件情報を抽出
         projects = []
-        for row in c.fetchall():
-            project = dict(row)
-            # 必要なスキル名がNoneの場合は空の文字列に変換
-            if not project.get('required_skill_names'):
-                project['required_skill_names'] = ''
-            projects.append(project)
+        for msg in messages:
+            try:
+                message = service.users().messages().get(
+                    userId='me',
+                    id=msg['id'],
+                    format='full'
+                ).execute()
+                
+                # メールヘッダーから基本情報を抽出
+                headers = {}
+                for header in message.get('payload', {}).get('headers', []):
+                    headers[header['name'].lower()] = header['value']
+                
+                # メール本文を抽出
+                email_body = ''
+                payload = message.get('payload', {})
+                if 'parts' in payload:
+                    for part in payload['parts']:
+                        if part['mimeType'] == 'text/plain' and 'body' in part and 'data' in part['body']:
+                            email_body += base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+                elif 'body' in payload and 'data' in payload['body']:
+                    email_body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+                
+                # スキルマッチング
+                matched_skills = []
+                email_content = f"{headers.get('subject', '')} {email_body}".lower()
+                
+                for skill in skills:
+                    if skill.lower() in email_content:
+                        matched_skills.append(skill)
+                
+                if matched_skills:
+                    project = {
+                        'id': msg['id'],
+                        'name': headers.get('subject', '件名なし'),
+                        'from': headers.get('from', '送信者不明'),
+                        'date': headers.get('date', ''),
+                        'snippet': email_body[:200] + '...' if len(email_body) > 200 else email_body,
+                        'matched_skills': matched_skills,
+                        'match_count': len(matched_skills),
+                        'match_percentage': int((len(matched_skills) / len(skills)) * 100) if skills else 0
+                    }
+                    projects.append(project)
+                    
+            except Exception as e:
+                print(f"[プロジェクト検索] メール処理エラー (ID: {msg.get('id')}): {str(e)}")
+                continue
+        
+        # マッチ率の高い順にソート
+        projects.sort(key=lambda x: x.get('match_percentage', 0), reverse=True)
+        
+        print(f"[プロジェクト検索] マッチした案件数: {len(projects)}")
         
         # テンプレートにプロジェクトデータを渡してレンダリング
         return render_template('projects.html', projects=projects)
         
     except Exception as e:
-        app.logger.error(f'プロジェクト取得エラー: {str(e)}')
-        # エラーが発生した場合は空のリストを渡してテンプレートをレンダリング
-        return render_template('projects.html', projects=[])
-        
-    finally:
-        if conn:
-            conn.close()
+        error_msg = f'プロジェクトの取得中にエラーが発生しました: {str(e)}'
+        app.logger.error(f'[プロジェクト検索] エラー: {error_msg}', exc_info=True)
+        return render_template('projects.html', 
+                            projects=[], 
+                            error_message=error_msg)
 
 # エラーメッセージ
 error_messages = {

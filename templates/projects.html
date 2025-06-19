@@ -410,6 +410,63 @@ function executeSearch() {
 }
 
 /**
+ * プロジェクトをスキルでフィルタリングする
+ * @param {Array} projects - フィルタリングするプロジェクトの配列
+ * @param {Array} skills - フィルターに使用するスキルの配列
+ * @returns {Array} フィルタリングされたプロジェクトの配列
+ */
+function applySkillFilters(projects, skills) {
+    if (!Array.isArray(projects)) {
+        return [];
+    }
+    // スキルが空の場合はフィルタリングせずに全件返す
+    if (!Array.isArray(skills) || skills.length === 0) {
+        return projects;
+    }
+    
+    // スキルを小文字に変換して比較用の配列を作成
+    const lowerCaseSkills = skills.map(skill => skill.toLowerCase());
+    
+    return projects.filter(project => {
+        // プロジェクトのスキルを取得（複数のプロパティをチェック）
+        const projectSkills = [];
+        
+        // 様々なプロパティからスキルを収集
+        if (project.required_skills) {
+            if (Array.isArray(project.required_skills)) {
+                project.required_skills.forEach(skill => projectSkills.push(skill.toLowerCase()));
+            } else if (typeof project.required_skills === 'string') {
+                project.required_skills.split(',').forEach(skill => 
+                    projectSkills.push(skill.trim().toLowerCase())
+                );
+            }
+        }
+        
+        if (project.skills && Array.isArray(project.skills)) {
+            project.skills.forEach(skill => projectSkills.push(skill.toLowerCase()));
+        }
+        
+        if (project.matched_skills && Array.isArray(project.matched_skills)) {
+            project.matched_skills.forEach(skill => projectSkills.push(skill.toLowerCase()));
+        }
+        
+        // プロジェクトの説明やタイトルからもスキルを検索
+        const projectText = [
+            project.title || '',
+            project.description || '',
+            project.subject || '',
+            project.snippet || ''
+        ].join(' ').toLowerCase();
+        
+        // いずれかのスキルがプロジェクトのスキルまたはテキストに含まれているかチェック
+        return lowerCaseSkills.some(skill => 
+            projectSkills.includes(skill) || 
+            projectText.includes(skill)
+        );
+    });
+}
+
+/**
  * プロジェクト一覧を取得する
  */
 function fetchProjects() {
@@ -419,6 +476,9 @@ function fetchProjects() {
     // ローディング表示
     if (loadingIndicator) loadingIndicator.classList.remove('hidden');
     if (projectsList) projectsList.innerHTML = '';
+    
+    console.log('fetchProjects called');
+    console.log('Current filters:', currentFilters);
     
     try {
         // 検索クエリを取得
@@ -471,14 +531,27 @@ function fetchProjects() {
                 throw new Error('無効なレスポンス形式です');
             }
             
-            // 互換性のため、data.projects と data.data.projects の両方をチェック
-            const projects = data.projects || (data.data && data.data.projects) || [];
-            allProjects = Array.isArray(projects) ? projects : [];
+            // 新しいAPIレスポンス形式に対応
+            let projects = [];
+            if (data.status === 'success') {
+                // 新しい形式: { status: 'success', data: [...], total: X }
+                projects = Array.isArray(data.data) ? data.data : [];
+            } else if (Array.isArray(data.projects)) {
+                // 古い形式: { projects: [...] }
+                projects = data.projects;
+            } else if (Array.isArray(data)) {
+                // 配列が直接返ってきた場合
+                projects = data;
+            }
+            
+            allProjects = projects;
             
             if (allProjects.length === 0) {
                 showNoProjectsMessage();
             } else {
-                displayProjects(allProjects);
+                // スキルフィルターを適用
+                const filteredProjects = applySkillFilters(allProjects, currentFilters.skills);
+                displayProjects(filteredProjects);
             }
         })
         .catch(error => {
@@ -528,6 +601,7 @@ function handleApiResponse(response) {
  * @param {Array} projects - 表示するプロジェクトの配列
  */
 function displayProjects(projects) {
+    console.log('Displaying projects:', projects); // デバッグ用
     const projectsList = document.getElementById('projectsList');
     if (!projectsList) return;
 
@@ -571,7 +645,7 @@ function displayProjects(projects) {
                     <div class="flex justify-between items-start">
                         <div class="flex-1 min-w-0">
                             <h3 class="text-lg font-semibold text-gray-900 truncate">
-                                ${escapeHtml(project.title || 'タイトルなし')}
+                                ${escapeHtml(project.title || project.subject || '無題の案件')}
                             </h3>
                             <p class="text-sm text-gray-500 mt-1">${formattedDate}</p>
                         </div>
@@ -597,15 +671,23 @@ function displayProjects(projects) {
                                     スレッドを開く
                                 </button>
                             ` : ''}
-                            <button data-project-id="${project.id}"
-                                    class="view-details-btn w-full sm:w-auto px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-                                詳細を見る
-                            </button>
+                            <a href="https://mail.google.com/mail/u/0/#all/${project.id}" target="_blank"
+                                   class="w-full sm:w-auto px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-center">
+                                 詳細を見る
+                             </a>
                         </div>
                     </div>
                 </div>
             `;
         }).join('');
+
+        // ボタンのイベントリスナーを追加
+        projectsList.querySelectorAll('.open-thread-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const threadId = e.currentTarget.dataset.threadId;
+                openGmailThread(threadId);
+            });
+        });
     } catch (error) {
         console.error('プロジェクトの表示中にエラーが発生しました:', error);
         showErrorMessage('プロジェクトの表示中にエラーが発生しました');
