@@ -602,6 +602,7 @@ function handleApiResponse(response) {
  */
 function displayProjects(projects) {
     console.log('Displaying projects:', projects); // デバッグ用
+    console.log('First project gmail_url:', projects[0]?.gmail_url); // デバッグ用
     const projectsList = document.getElementById('projectsList');
     if (!projectsList) return;
 
@@ -665,16 +666,14 @@ function displayProjects(projects) {
                             <span>勤務地: ${escapeHtml(location)}</span>
                         </div>
                         <div class="flex space-x-2 w-full sm:w-auto">
-                            ${project.thread_id ? `
-                                <button data-thread-id="${project.thread_id}" 
-                                        class="open-thread-btn w-full sm:w-auto px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-                                    スレッドを開く
-                                </button>
-                            ` : ''}
-                            <a href="https://mail.google.com/mail/u/0/#all/${project.id}" target="_blank"
-                                   class="w-full sm:w-auto px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-center">
-                                 詳細を見る
-                             </a>
+                            <a href="https://mail.google.com/mail/u/0/#inbox" 
+                               target="_blank"
+                               rel="noopener noreferrer"
+                               class="w-full sm:w-auto px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 text-center inline-flex items-center justify-center gap-2">
+                                <i class="fas fa-envelope"></i>
+                                Gmail受信トレイを開く
+                            </a>
+
                         </div>
                     </div>
                 </div>
@@ -694,17 +693,6 @@ function displayProjects(projects) {
     }
 }
 
-/**
- * Gmailスレッドを新しいタブで開く
- * @param {string} threadId - GmailのスレッドID
- */
-function openGmailThread(threadId) {
-    if (!threadId) {
-        showErrorMessage('スレッドIDが指定されていません');
-        return;
-    }
-    window.open(`https://mail.google.com/mail/u/0/#inbox/${threadId}`, '_blank');
-}
 
 /**
  * プロジェクトの詳細を表示する
@@ -910,8 +898,22 @@ function openGmailWithProject(project) {
         `雇用形態: ${escapeHtml(project.employment_type || '')}\n\n` +
         `よろしくお願いいたします。`
     );
-    window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=&su=${subject}&body=${body}`, '_blank');
+    window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=&su=${subject}&body=${body}`, '_blank', 'noopener');
 }
+
+// HTMLエスケープ用のヘルパー関数
+function escapeHtml(unsafe) {
+    if (!unsafe) return '';
+    return unsafe
+        .toString()
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+
 </script>
 
 {% endblock %}

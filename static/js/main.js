@@ -829,11 +829,11 @@ function openGmailWithProject(project) {
         return;
     }
     
-    // GmailのメールIDが直接ある場合は、そのメールを開く
-    if (project.id && project.source === 'gmail') {
-        const gmailUrl = `https://mail.google.com/mail/u/0/#inbox/${project.id}`;
+    // GmailのスレッドIDがある場合は、そのスレッドを開く
+    if (project.thread_id && project.source === 'gmail') {
+        const gmailUrl = `https://mail.google.com/mail/u/0/#all/${project.thread_id}`;
         console.log('Gmailを開きます:', gmailUrl);
-        window.open(gmailUrl, '_blank');
+        window.open(gmailUrl, '_blank', 'noopener,noreferrer');
         return;
     }
     
@@ -1080,10 +1080,16 @@ async function searchMatchingProjectsInGmail(skills) {
 }
 
 // グローバル関数: メールを表示（新しいタブでGmailを開く）
-function viewEmail(emailId) {
-    if (emailId) {
-        window.open(`https://mail.google.com/mail/u/0/#inbox/${emailId}`, '_blank');
+/**
+ * Gmailスレッドを新しいタブで開く
+ * @param {string} threadId - GmailのスレッドID
+ */
+function openGmailThread(threadId) {
+    if (!threadId) {
+        showErrorMessage('スレッドIDが指定されていません');
+        return;
     }
+    window.open(`https://mail.google.com/mail/u/0/#all/${threadId}`, '_blank', 'noopener,noreferrer');
 }
 
 // スキルを保存する関数
