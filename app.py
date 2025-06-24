@@ -853,6 +853,21 @@ def search_gmail():
                     print("-" * 50)
                     continue
                 
+                # 件名と送信者を取得
+                subject = headers.get('subject', '(件名なし)')
+                sender = headers.get('from', '送信者不明')
+                date = headers.get('date', '')
+                
+                # メール本文を取得
+                email_body = ''
+                payload = message.get('payload', {})
+                if 'parts' in payload:
+                    for part in payload['parts']:
+                        if part['mimeType'] == 'text/plain' and 'body' in part and 'data' in part['body']:
+                            email_body += base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+                elif 'body' in payload and 'data' in payload['body']:
+                    email_body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+                
                 # 受信日時をフォーマット
                 email_date = headers.get('date', '')
                 try:
@@ -861,19 +876,28 @@ def search_gmail():
                 except (TypeError, ValueError):
                     pass
                 
-                email_data = {
+                # 案件情報を作成
+                project = {
                     'id': message['id'],
-                    'subject': headers.get('subject', '(件名なし)'),
-                    'from': headers.get('from', '送信者不明'),
-                    'to': headers.get('to', ''),
-                    'snippet': message.get('snippet', ''),
+                    'name': headers.get('subject', '(件名なし)'),
+                    'client_name': headers.get('from', '送信者不明'),
                     'date': email_date,
-                    'has_attachments': has_attachments
+                    'snippet': message.get('snippet', ''),
+                    'body': email_body,
+                    'source': 'gmail'
                 }
-                emails.append(email_data)
+                
+                # スキルマッチング情報を追加（件名と本文の両方でマッチング）
+                search_text = f"{project['name']} {project['snippet']} {email_body}"
+                project['matched_skills'] = [s for s in normalized_skills if s.lower() in search_text.lower()]
+                project['match_count'] = len(project['matched_skills'])
+                project['match_score'] = project['match_count']
+                project['match_percentage'] = min(project['match_count'] * 20, 100)  # 1スキルあたり20%と仮定
+                
+                emails.append(project)
                 
             except Exception as e:
-                print(f"メッセージの取得中にエラーが発生しました: {e}")
+                print(f"メールの処理中にエラーが発生しました: {e}")
                 continue
         
         return jsonify({
@@ -1189,6 +1213,25 @@ def search_gmail_emails(service, skills, normalized_skills):
                 elif 'body' in payload and 'data' in payload['body']:
                     email_body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
                 
+                # 件名を取得してフィルタリング
+                subject = headers.get('subject', '').lower()
+                if any(keyword in subject for keyword in ['人材情報', '個人事業主', 'エンジニア情報', '人材紹介']):
+                    continue
+                
+                # 添付ファイルがあるかチェック
+                has_attachments = any(
+                    part.get('filename') 
+                    for part in message.get('payload', {}).get('parts', [])
+                    if part.get('filename')  # ファイル名があるパートのみをチェック
+                )
+                if has_attachments:
+                    continue
+                
+                # 件名と送信者を取得
+                subject = headers.get('subject', '(件名なし)')
+                sender = headers.get('from', '送信者不明')
+                date = headers.get('date', '')
+                
                 # 受信日時をフォーマット
                 email_date = headers.get('date', '')
                 try:
@@ -1375,8 +1418,8 @@ def extract_email_info(service, msg_id):
         # 日付をフォーマット
         try:
             if date:
-                date_obj = parsedate_to_datetime(date)
-                date = date_obj.strftime('%Y-%m-%d %H:%M:%S')
+                dt_parser = parser.parse(date)
+                date = dt_parser.strftime('%Y-%m-%d %H:%M:%S')
         except:
             date = '日付不明'
         
@@ -1643,6 +1686,20 @@ def get_projects_api():
                 headers = {}
                 for header in msg_data.get('payload', {}).get('headers', []):
                     headers[header['name'].lower()] = header['value']
+                
+                # 件名を取得してフィルタリング
+                subject = headers.get('subject', '').lower()
+                if any(keyword in subject for keyword in ['人材情報', '個人事業主', 'エンジニア情報', '人材紹介']):
+                    continue
+                
+                # 添付ファイルがあるかチェック
+                has_attachments = any(
+                    part.get('filename') 
+                    for part in msg_data.get('payload', {}).get('parts', [])
+                    if part.get('filename')  # ファイル名があるパートのみをチェック
+                )
+                if has_attachments:
+                    continue
                 
                 # 件名と送信者を取得
                 subject = headers.get('subject', '(件名なし)')
