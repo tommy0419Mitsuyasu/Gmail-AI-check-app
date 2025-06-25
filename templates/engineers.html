@@ -1,0 +1,433 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <!-- ヘッダー -->
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800">エンジニア一覧</h1>
+            <p class="text-gray-600 mt-1">登録されているエンジニアの一覧です。スキルや経験に基づいて検索できます。</p>
+        </div>
+        <div class="mt-4 md:mt-0 flex space-x-3">
+            <div class="relative">
+                <select id="sortBy" class="appearance-none bg-white border border-gray-300 rounded-md pl-3 pr-8 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="recent">新着順</option>
+                    <option value="match">マッチ度順</option>
+                    <option value="experience">経験年数順</option>
+                </select>
+                <div class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none">
+                    <i class="fas fa-chevron-down text-gray-500"></i>
+                </div>
+            </div>
+            <button id="filterBtn" class="flex items-center space-x-2 bg-white border border-gray-300 rounded-md px-3 py-2 text-sm hover:bg-gray-50">
+                <i class="fas fa-sliders-h text-gray-500"></i>
+                <span>絞り込み</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- フィルターサイドバー -->
+    <div id="filterSidebar" class="hidden fixed inset-0 z-50 overflow-hidden">
+        <div class="absolute inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
+        <div class="fixed inset-y-0 right-0 pl-10 max-w-full flex">
+            <div class="w-screen max-w-md">
+                <div class="h-full flex flex-col bg-white shadow-xl overflow-y-scroll">
+                    <div class="flex-1 py-6 overflow-y-auto px-4 sm:px-6">
+                        <div class="flex items-start justify-between">
+                            <h2 class="text-lg font-medium text-gray-900">条件で絞り込む</h2>
+                            <div class="ml-3 h-7 flex items-center">
+                                <button id="closeFilter" class="-m-2 p-2 text-gray-400 hover:text-gray-500">
+                                    <span class="sr-only">Close panel</span>
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="mt-8">
+                            <div class="space-y-8">
+                                <!-- スキルで絞り込み -->
+                                <div>
+                                    <h3 class="text-sm font-medium text-gray-700 mb-3">スキル</h3>
+                                    <div class="mt-1">
+                                        <input type="text" id="skillFilter" placeholder="例: Python, React" class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                    </div>
+                                    <div id="selectedSkills" class="flex flex-wrap gap-2 mt-2">
+                                        <!-- 選択されたスキルがここに表示されます -->
+                                    </div>
+                                </div>
+
+                                <!-- 経験年数 -->
+                                <div>
+                                    <h3 class="text-sm font-medium text-gray-700 mb-3">経験年数</h3>
+                                    <div class="space-y-2">
+                                        <label class="flex items-center">
+                                            <input type="checkbox" name="experience" value="1" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                            <span class="ml-2 text-sm text-gray-700">1年未満</span>
+                                        </label>
+                                        <label class="flex items-center">
+                                            <input type="checkbox" name="experience" value="1-3" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                            <span class="ml-2 text-sm text-gray-700">1〜3年</span>
+                                        </label>
+                                        <label class="flex items-center">
+                                            <input type="checkbox" name="experience" value="3-5" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                            <span class="ml-2 text-sm text-gray-700">3〜5年</span>
+                                        </label>
+                                        <label class="flex items-center">
+                                            <input type="checkbox" name="experience" value="5-10" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                            <span class="ml-2 text-sm text-gray-700">5〜10年</span>
+                                        </label>
+                                        <label class="flex items-center">
+                                            <input type="checkbox" name="experience" value="10+" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                            <span class="ml-2 text-sm text-gray-700">10年以上</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <!-- 勤務地 -->
+                                <div>
+                                    <h3 class="text-sm font-medium text-gray-700 mb-3">対応可能な勤務地</h3>
+                                    <div class="space-y-2">
+                                        <label class="flex items-center">
+                                            <input type="checkbox" name="location" value="東京" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                            <span class="ml-2 text-sm text-gray-700">東京</span>
+                                        </label>
+                                        <label class="flex items-center">
+                                            <input type="checkbox" name="location" value="大阪" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                            <span class="ml-2 text-sm text-gray-700">大阪</span>
+                                        </label>
+                                        <label class="flex items-center">
+                                            <input type="checkbox" name="location" value="名古屋" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                            <span class="ml-2 text-sm text-gray-700">名古屋</span>
+                                        </label>
+                                        <label class="flex items-center">
+                                            <input type="checkbox" name="location" value="福岡" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                            <span class="ml-2 text-sm text-gray-700">福岡</span>
+                                        </label>
+                                        <label class="flex items-center">
+                                            <input type="checkbox" name="location" value="リモート" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                            <span class="ml-2 text-sm text-gray-700">リモート可</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <!-- 単価 -->
+                                <div>
+                                    <h3 class="text-sm font-medium text-gray-700 mb-3">希望単価（月額）</h3>
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label for="minSalary" class="block text-sm font-medium text-gray-500 mb-1">下限</label>
+                                            <div class="relative rounded-md shadow-sm">
+                                                <input type="number" id="minSalary" class="focus:ring-blue-500 focus:border-blue-500 block w-full pl-3 pr-12 sm:text-sm border-gray-300 rounded-md" placeholder="0">
+                                                <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                                                    <span class="text-gray-500 sm:text-sm">万円</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label for="maxSalary" class="block text-sm font-medium text-gray-500 mb-1">上限</label>
+                                            <div class="relative rounded-md shadow-sm">
+                                                <input type="number" id="maxSalary" class="focus:ring-blue-500 focus:border-blue-500 block w-full pl-3 pr-12 sm:text-sm border-gray-300 rounded-md" placeholder="999">
+                                                <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                                                    <span class="text-gray-500 sm:text-sm">万円</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="border-t border-gray-200 px-4 py-6 sm:px-6">
+                        <div class="flex justify-between">
+                            <button id="resetFilters" class="text-sm font-medium text-gray-500 hover:text-gray-600">
+                                リセット
+                            </button>
+                            <button id="applyFilters" class="bg-blue-600 border border-transparent rounded-md shadow-sm py-2 px-4 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                                適用する
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- エンジニア一覧 -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <!-- エンジニアカード1 -->
+        <div class="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200 hover:shadow-lg transition">
+            <div class="p-6">
+                <div class="flex items-start justify-between">
+                    <div class="flex items-center">
+                        <div class="h-16 w-16 rounded-full bg-blue-100 flex items-center justify-center text-2xl font-bold text-blue-800">
+                            山田
+                        </div>
+                        <div class="ml-4">
+                            <h2 class="text-lg font-bold text-gray-900">山田 太郎</h2>
+                            <p class="text-sm text-gray-500">フルスタックエンジニア</p>
+                        </div>
+                    </div>
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        マッチ度 92%
+                    </span>
+                </div>
+                
+                <div class="mt-4">
+                    <div class="flex items-center text-sm text-gray-500 mb-2">
+                        <i class="fas fa-briefcase mr-2"></i>
+                        <span>5年 2ヶ月</span>
+                    </div>
+                    <div class="flex items-center text-sm text-gray-500 mb-4">
+                        <i class="fas fa-map-marker-alt mr-2"></i>
+                        <span>東京・リモート</span>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <h3 class="text-sm font-medium text-gray-700 mb-2">スキル</h3>
+                        <div class="flex flex-wrap gap-1">
+                            <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">Python</span>
+                            <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">Django</span>
+                            <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">React</span>
+                            <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">AWS</span>
+                            <span class="bg-gray-100 text-gray-800 text-xs font-medium px-2 py-0.5 rounded">+3</span>
+                        </div>
+                    </div>
+                    
+                    <div class="flex justify-between items-center mt-6">
+                        <span class="text-lg font-bold text-gray-900">月額 80〜100万円</span>
+                        <a href="/engineers/1" class="text-blue-600 hover:text-blue-800 font-medium text-sm">
+                            詳細を見る <i class="fas fa-chevron-right ml-1 text-xs"></i>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- エンジニアカード2 -->
+        <div class="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200 hover:shadow-lg transition">
+            <div class="p-6">
+                <div class="flex items-start justify-between">
+                    <div class="flex items-center">
+                        <div class="h-16 w-16 rounded-full bg-green-100 flex items-center justify-center text-2xl font-bold text-green-800">
+                            佐藤
+                        </div>
+                        <div class="ml-4">
+                            <h2 class="text-lg font-bold text-gray-900">佐藤 花子</h2>
+                            <p class="text-sm text-gray-500">フロントエンドエンジニア</p>
+                        </div>
+                    </div>
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        マッチ度 88%
+                    </span>
+                </div>
+                
+                <div class="mt-4">
+                    <div class="flex items-center text-sm text-gray-500 mb-2">
+                        <i class="fas fa-briefcase mr-2"></i>
+                        <span>3年 6ヶ月</span>
+                    </div>
+                    <div class="flex items-center text-sm text-gray-500 mb-4">
+                        <i class="fas fa-map-marker-alt mr-2"></i>
+                        <span>大阪・リモート</span>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <h3 class="text-sm font-medium text-gray-700 mb-2">スキル</h3>
+                        <div class="flex flex-wrap gap-1">
+                            <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">JavaScript</span>
+                            <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">TypeScript</span>
+                            <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">React</span>
+                            <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">Vue.js</span>
+                            <span class="bg-gray-100 text-gray-800 text-xs font-medium px-2 py-0.5 rounded">+2</span>
+                        </div>
+                    </div>
+                    
+                    <div class="flex justify-between items-center mt-6">
+                        <span class="text-lg font-bold text-gray-900">月額 70〜90万円</span>
+                        <a href="/engineers/2" class="text-blue-600 hover:text-blue-800 font-medium text-sm">
+                            詳細を見る <i class="fas fa-chevron-right ml-1 text-xs"></i>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- エンジニアカード3 -->
+        <div class="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200 hover:shadow-lg transition">
+            <div class="p-6">
+                <div class="flex items-start justify-between">
+                    <div class="flex items-center">
+                        <div class="h-16 w-16 rounded-full bg-purple-100 flex items-center justify-center text-2xl font-bold text-purple-800">
+                            田中
+                        </div>
+                        <div class="ml-4">
+                            <h2 class="text-lg font-bold text-gray-900">田中 健太</h2>
+                            <p class="text-sm text-gray-500">バックエンドエンジニア</p>
+                        </div>
+                    </div>
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        マッチ度 85%
+                    </span>
+                </div>
+                
+                <div class="mt-4">
+                    <div class="flex items-center text-sm text-gray-500 mb-2">
+                        <i class="fas fa-briefcase mr-2"></i>
+                        <span>7年 1ヶ月</span>
+                    </div>
+                    <div class="flex items-center text-sm text-gray-500 mb-4">
+                        <i class="fas fa-map-marker-alt mr-2"></i>
+                        <span>東京・名古屋・リモート</span>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <h3 class="text-sm font-medium text-gray-700 mb-2">スキル</h3>
+                        <div class="flex flex-wrap gap-1">
+                            <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">Java</span>
+                            <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">Spring Boot</span>
+                            <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">Kotlin</span>
+                            <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">AWS</span>
+                            <span class="bg-gray-100 text-gray-800 text-xs font-medium px-2 py-0.5 rounded">+5</span>
+                        </div>
+                    </div>
+                    
+                    <div class="flex justify-between items-center mt-6">
+                        <span class="text-lg font-bold text-gray-900">月額 90〜120万円</span>
+                        <a href="/engineers/3" class="text-blue-600 hover:text-blue-800 font-medium text-sm">
+                            詳細を見る <i class="fas fa-chevron-right ml-1 text-xs"></i>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- ページネーション -->
+    <div class="mt-10 flex justify-center">
+        <nav class="inline-flex rounded-md shadow -space-x-px">
+            <a href="#" class="px-3 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                <span class="sr-only">前へ</span>
+                <i class="fas fa-chevron-left"></i>
+            </a>
+            <a href="#" class="px-4 py-2 border-t border-b border-gray-300 bg-blue-50 text-blue-600 text-sm font-medium">1</a>
+            <a href="#" class="px-4 py-2 border-t border-b border-gray-300 bg-white text-gray-700 hover:bg-gray-50 text-sm font-medium">2</a>
+            <a href="#" class="px-4 py-2 border-t border-b border-gray-300 bg-white text-gray-700 hover:bg-gray-50 text-sm font-medium">3</a>
+            <span class="px-4 py-2 border-t border-b border-gray-300 bg-white text-gray-500 text-sm font-medium">...</span>
+            <a href="#" class="px-4 py-2 border-t border-b border-gray-300 bg-white text-gray-700 hover:bg-gray-50 text-sm font-medium">10</a>
+            <a href="#" class="px-3 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                <span class="sr-only">次へ</span>
+                <i class="fas fa-chevron-right"></i>
+            </a>
+        </nav>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // フィルターサイドバーの表示/非表示
+    const filterBtn = document.getElementById('filterBtn');
+    const closeFilter = document.getElementById('closeFilter');
+    const filterSidebar = document.getElementById('filterSidebar');
+    const applyFilters = document.getElementById('applyFilters');
+    const resetFilters = document.getElementById('resetFilters');
+    
+    filterBtn.addEventListener('click', function() {
+        filterSidebar.classList.remove('hidden');
+    });
+    
+    closeFilter.addEventListener('click', function() {
+        filterSidebar.classList.add('hidden');
+    });
+    
+    applyFilters.addEventListener('click', function() {
+        // ここでフィルターを適用する処理を実装
+        filterSidebar.classList.add('hidden');
+        // フィルター適用時の処理（API呼び出しなど）
+    });
+    
+    resetFilters.addEventListener('click', function() {
+        // すべてのチェックボックスをリセット
+        const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = false;
+        });
+        
+        // テキスト入力フィールドをリセット
+        document.getElementById('skillFilter').value = '';
+        document.getElementById('minSalary').value = '';
+        document.getElementById('maxSalary').value = '';
+        
+        // 選択されたスキルをクリア
+        document.getElementById('selectedSkills').innerHTML = '';
+    });
+    
+    // スキルフィルターの入力処理
+    const skillFilter = document.getElementById('skillFilter');
+    const selectedSkills = document.getElementById('selectedSkills');
+    
+    skillFilter.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            const skill = this.value.trim().replace(/,/g, '');
+            if (skill) {
+                addSkill(skill);
+                this.value = '';
+            }
+        }
+    });
+    
+    function addSkill(skill) {
+        if (!skill) return;
+        
+        const skillTag = document.createElement('span');
+        skillTag.className = 'inline-flex items-center bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded';
+        skillTag.innerHTML = `
+            ${skill}
+            <button type="button" class="ml-1.5 text-blue-500 hover:text-blue-700">
+                <i class="fas fa-times"></i>
+            </button>
+        `;
+        
+        const removeBtn = skillTag.querySelector('button');
+        removeBtn.addEventListener('click', function() {
+            skillTag.remove();
+        });
+        
+        selectedSkills.appendChild(skillTag);
+    }
+    
+    // ソート機能
+    const sortBy = document.getElementById('sortBy');
+    sortBy.addEventListener('change', function() {
+        // ここでソート処理を実装
+        console.log('Sort by:', this.value);
+        // APIを呼び出して並び替えたり、フロントエンドで並び替えたりする
+    });
+});
+</script>
+
+<style>
+/* アニメーション用のスタイル */
+.bg-blue-100 {
+    transition: all 0.3s ease;
+}
+
+/* スクロールバーのスタイル */
+#filterSidebar::-webkit-scrollbar {
+    width: 6px;
+}
+
+#filterSidebar::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+#filterSidebar::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 3px;
+}
+
+#filterSidebar::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+</style>
+{% endblock %}

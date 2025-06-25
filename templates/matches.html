@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>案件マッチング結果</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-bold">案件マッチング結果</h1>
+            <a href="/" class="text-blue-600 hover:text-blue-800">
+                <i class="fas fa-arrow-left mr-1"></i> 戻る
+            </a>
+        </div>
+        
+        <div id="loading" class="text-center py-12">
+            <div class="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+            <p class="mt-4 text-gray-600">マッチングを実行中です...</p>
+        </div>
+        
+        <div id="matches-container" class="space-y-6 hidden">
+            <!-- マッチング結果がここに表示されます -->
+        </div>
+        
+        <div id="no-matches" class="hidden text-center py-12">
+            <div class="inline-block bg-blue-100 text-blue-800 p-4 rounded-full mb-4">
+                <i class="fas fa-inbox text-3xl"></i>
+            </div>
+            <h3 class="text-xl font-semibold mb-2">マッチする案件は見つかりませんでした</h3>
+            <p class="text-gray-600">新しいメールが届くまでお待ちください。</p>
+        </div>
+        
+        <div id="error-message" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
+            <p>エラーが発生しました。ページをリロードしてもう一度お試しください。</p>
+        </div>
+    </div>
+
+    <script>
+        // 要素を作成するヘルパー関数
+        function createElement(tag, attributes = {}, children = []) {
+            const element = document.createElement(tag);
+            
+            // 属性を設定
+            Object.entries(attributes).forEach(([key, value]) => {
+                if (key === 'class') {
+                    element.className = value;
+                } else if (key === 'text') {
+                    element.textContent = value;
+                } else if (key === 'html') {
+                    const fragment = document.createRange().createContextualFragment(value);
+                    element.appendChild(fragment);
+                } else if (key.startsWith('on') && typeof value === 'function') {
+                    element.addEventListener(key.substring(2), value);
+                } else if (value !== null && value !== undefined) {
+                    element.setAttribute(key, value);
+                }
+            });
+            
+            // 子要素を追加
+            if (Array.isArray(children)) {
+                children.forEach(child => {
+                    if (child instanceof Node) {
+                        element.appendChild(child);
+                    } else if (typeof child === 'string') {
+                        element.appendChild(document.createTextNode(child));
+                    }
+                });
+            } else if (children instanceof Node) {
+                element.appendChild(children);
+            } else if (typeof children === 'string') {
+                element.appendChild(document.createTextNode(children));
+            }
+            
+            return element;
+        }
+        
+        // スキル要素を作成する関数
+        function createSkillBadge(skill) {
+            return createElement('span', {
+                class: 'bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded',
+                text: skill
+            });
+        }
+
+        // エンジニアカードを作成する関数
+        function createEngineerCard(engineer, requiredSkillsCount) {
+            const skills = engineer.skills ? engineer.skills.split(',') : [];
+            const matchPercentage = Math.min(100, Math.floor((skills.length / requiredSkillsCount) * 100));
+            
+            return createElement('div', { class: 'border-l-4 border-blue-500 pl-4 py-2 bg-gray-50 rounded' }, [
+                createElement('div', { class: 'flex justify-between items-start' }, [
+                    createElement('div', {}, [
+                        createElement('h4', {
+                            class: 'font-semibold text-gray-800',
+                            text: engineer.name || '名前不明'
+                        }),
+                        createElement('p', {
+                            class: 'text-sm text-gray-600',
+                            text: engineer.email || 'メールなし'
+                        })
+                    ]),
+                    createElement('span', {
+                        class: 'bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded',
+                        text: `マッチ度: ${matchPercentage}%`
+                    })
+                ]),
+                createElement('div', { class: 'mt-2' }, [
+                    createElement('p', {
+                        class: 'text-sm text-gray-700',
+                        text: `スキル: ${engineer.skills || '登録なし'}`
+                    })
+                ])
+            ]);
+        }
+
+        // メールカードを作成する関数
+        function createEmailCard(match) {
+            const skillsContainer = createElement('div', { class: 'flex flex-wrap gap-2' });
+            match.required_skills.forEach(skill => {
+                skillsContainer.appendChild(createSkillBadge(skill));
+            });
+
+            const engineersContainer = createElement('div', { class: 'space-y-4' });
+            match.matched_engineers.forEach(engineer => {
+                engineersContainer.appendChild(createEngineerCard(engineer, match.required_skills.length));
+            });
+
+            return createElement('div', { class: 'bg-white rounded-lg shadow-md overflow-hidden mb-6' }, [
+                createElement('div', { class: 'p-6' }, [
+                    // ヘッダー
+                    createElement('div', { class: 'flex justify-between items-start mb-4' }, [
+                        createElement('h2', { 
+                            class: 'text-xl font-semibold text-gray-800',
+                            text: match.email.subject || '件名なし'
+                        }),
+                        createElement('span', {
+                            class: 'bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded',
+                            text: match.email.date || '日付不明'
+                        })
+                    ]),
+                    
+                    // 差出人
+                    createElement('div', { class: 'mb-4' }, [
+                        createElement('h3', { 
+                            class: 'font-medium text-gray-700 mb-2',
+                            text: '差出人:'
+                        }),
+                        createElement('p', { 
+                            class: 'text-gray-600',
+                            text: match.email.from
+                        })
+                    ]),
+                    
+                    // 必要なスキル
+                    createElement('div', { class: 'mb-4' }, [
+                        createElement('h3', {
+                            class: 'font-medium text-gray-700 mb-2',
+                            text: '必要なスキル:'
+                        }),
+                        skillsContainer
+                    ]),
+                    
+                    // マッチしたエンジニア
+                    createElement('div', [
+                        createElement('h3', {
+                            class: 'font-medium text-gray-700 mb-2',
+                            text: 'マッチしたエンジニア:'
+                        }),
+                        engineersContainer
+                    ])
+                ])
+            ]);
+        }
+
+        
+        // マッチング結果を表示する関数
+        function displayMatches(matches) {
+            const container = document.getElementById('matches-container');
+            container.innerHTML = ''; // コンテナをクリア
+            
+            if (!matches || !matches.length) {
+                return;
+            }
+            
+            matches.forEach(match => {
+                const emailCard = createEmailCard(match);
+                container.appendChild(emailCard);
+            });
+            
+            container.classList.remove('hidden');
+        }
+        
+        // ページ読み込み時の処理
+        document.addEventListener('DOMContentLoaded', function() {
+            const loading = document.getElementById('loading');
+            const container = document.getElementById('matches-container');
+            const noMatches = document.getElementById('no-matches');
+            const errorMessage = document.getElementById('error-message');
+            
+            // APIからマッチング結果を取得
+            fetch('/api/match_projects')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('ネットワークの応答が正しくありません');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    loading.classList.add('hidden');
+                    
+                    if (data.status === 'error') {
+                        errorMessage.classList.remove('hidden');
+                        errorMessage.textContent = `エラー: ${data.message}`;
+                        return;
+                    }
+                    
+                    if (!data.matches || data.matches.length === 0) {
+                        noMatches.classList.remove('hidden');
+                        return;
+                    }
+                    
+                    // マッチング結果を表示
+                    displayMatches(data.matches);
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    loading.classList.add('hidden');
+                    errorMessage.classList.remove('hidden');
+                    errorMessage.textContent = `エラー: ${error.message}`;
+                });
+        });
+    </script>
+</body>
+</html>

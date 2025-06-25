@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 py-8">
+    <div class="bg-white rounded-lg shadow-md p-8">
+        <h1 class="text-2xl font-bold text-gray-800 mb-6">スキルシートをアップロード</h1>
+        <p class="text-gray-600 mb-6">PDFまたはWord形式のスキルシートをアップロードして、スキルを自動抽出します。</p>
+        
+        <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center mb-8">
+            <form id="uploadForm" enctype="multipart/form-data" class="mb-4" aria-label="ファイルアップロードフォーム">
+                <div id="dropZone" class="cursor-pointer" role="button" tabindex="0" aria-label="ファイルをドラッグ＆ドロップするエリア">
+                    <i class="fas fa-cloud-upload-alt text-4xl text-blue-500 mb-4" aria-hidden="true"></i>
+                    <p class="text-gray-600 mb-2">スキルシートをドラッグ＆ドロップ</p>
+                    <p class="text-sm text-gray-500 mb-4">または</p>
+                    <label for="fileInput" class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg cursor-pointer transition">
+                        ファイルを選択
+                    </label>
+                    <input id="fileInput" 
+                           name="file" 
+                           type="file" 
+                           class="hidden" 
+                           accept=".pdf,.docx,.doc" 
+                           aria-label="スキルシートファイルを選択"
+                           required>
+                    <input type="hidden" 
+                           id="engineerId" 
+                           name="engineerId" 
+                           value="1"
+                           aria-label="エンジニアID">
+                </div>
+                <div id="fileInfo" class="mt-4 hidden">
+                    <p class="text-gray-700">選択されたファイル: <span id="fileName" class="font-medium"></span></p>
+                    <button type="submit" id="uploadBtn" class="mt-4 bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-6 rounded-lg transition">
+                        <i class="fas fa-upload mr-2"></i>アップロードして解析
+                    </button>
+                </div>
+            </form>
+        </form>
+
+        <div id="uploadProgress" class="hidden">
+            <div class="w-full bg-gray-200 rounded-full h-2.5 mb-4">
+                <div id="progressBar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+            </div>
+            <p class="text-center text-gray-600 mb-4">スキルシートを解析中...</p>
+        </div>
+
+        <div id="resultSection" class="hidden">
+            <div class="bg-blue-50 border-l-4 border-blue-500 p-4 mb-6">
+                <div class="flex">
+                    <div class="flex-shrink-0">
+                        <i class="fas fa-check-circle text-blue-500 text-xl"></i>
+                    </div>
+                    <div class="ml-3">
+                        <p class="text-sm text-blue-700">
+                            スキルシートの解析が完了しました！あなたに最適な案件を探しています。
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="skillsExtracted" class="mb-8">
+                <h3 class="text-lg font-medium text-gray-800 mb-4">抽出されたスキル</h3>
+                <div id="skillsByCategory">
+                    <!-- カテゴリごとにスキルが動的に挿入されます -->
+                </div>
+            </div>
+
+            <!-- 検索結果表示エリア -->
+            <div id="matchingProjects" class="mt-8">
+                <!-- ここに検索結果が表示されます -->
+            </div>
+
+            <div class="mt-8">
+                <h3 class="text-lg font-medium text-gray-800 mb-4">抽出されたテキスト（プレビュー）</h3>
+                <div id="textPreview" class="bg-gray-50 p-4 rounded-lg text-sm text-gray-600 whitespace-pre-wrap overflow-auto max-h-60">
+                    <!-- 抽出されたテキストが表示されます -->
+                </div>
+            </div>
+
+            <div class="mt-8 flex justify-between">
+                <button id="backToUpload" class="bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium py-2 px-6 rounded-lg transition">
+                    <i class="fas fa-arrow-left mr-2"></i>別のファイルをアップロード
+                </button>
+                <button id="saveSkillsBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg transition">
+                    スキルを保存する <i class="fas fa-save ml-2"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- エラーメッセージ表示用 -->
+        <div id="errorMessage" class="hidden mt-4 p-4 rounded-lg">
+            <div class="flex items-start">
+                <div class="flex-shrink-0">
+                    <i id="errorIcon" class="fas fa-exclamation-circle text-xl"></i>
+                </div>
+                <div class="ml-3">
+                    <h3 id="errorTitle" class="text-sm font-medium"></h3>
+                    <div id="errorDetails" class="mt-1 text-sm">
+                        <p id="errorText"></p>
+                        <ul id="errorList" class="list-disc pl-5 mt-1"></ul>
+                    </div>
+                    <div id="errorResolution" class="mt-2 text-sm">
+                        <p id="resolutionText" class="font-medium"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Gmail検索結果セクション -->
+<div id="gmailResultsSection" class="max-w-4xl mx-auto px-4 py-8 hidden">
+    <div class="bg-white rounded-lg shadow-md p-8">
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold text-gray-800">
+                <i class="fas fa-envelope text-blue-500 mr-2"></i>
+                マッチする案件メール
+            </h2>
+            <button onclick="document.getElementById('gmailResultsSection').classList.add('hidden')" 
+                    class="text-gray-500 hover:text-gray-700">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div id="gmailResults">
+            <!-- 検索結果がここに表示されます -->
+        </div>
+    </div>
+</div>
+
+<!-- ローディングオーバーレイ -->
+<div id="loadingOverlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+    <div class="bg-white p-6 rounded-lg shadow-lg max-w-sm w-full">
+        <div class="flex items-center">
+            <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3"></div>
+            <p class="text-gray-700">ファイルを処理中です...</p>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-2.5 mt-4">
+            <div id="progressBar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+        </div>
+    </div>
+</div>
+                </div>
+            </div>
+
+            <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6">
+                <div class="flex">
+                    <div class="flex-shrink-0">
+                        <i class="fas fa-exclamation-triangle text-yellow-400 text-xl"></i>
+                    </div>
+                    <div class="ml-3">
+                        <p class="text-sm text-yellow-700">
+                            スキルを確認し、不足しているスキルがあれば追加してください。
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-6">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-lg font-medium text-gray-800">スキルを追加</h3>
+                    <button id="addSkillBtn" class="text-blue-600 hover:text-blue-800 text-sm">
+                        <i class="fas fa-plus mr-1"></i>スキルを追加
+                    </button>
+                </div>
+                <div id="skillsForm" class="space-y-3">
+                    <!-- スキル入力フィールドが動的に追加されます -->
+                </div>
+            </div>
+
+            <div class="flex justify-end space-x-4">
+                <button id="backToUpload" class="px-4 py-2 border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    戻る
+                </button>
+                <button id="findProjectsBtn" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md">
+                    案件を探す <i class="fas fa-arrow-right ml-2"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    #dropZone {
+        transition: all 0.3s ease;
+    }
+    #dropZone.drag-over {
+        background-color: #f0f9ff;
+        border-color: #3b82f6;
+    }
+    .skill-tag {
+        display: inline-flex;
+        align-items: center;
+        background-color: #e0f2fe;
+        color: #0369a1;
+        padding: 0.25rem 0.75rem;
+        border-radius: 9999px;
+        font-size: 0.875rem;
+    }
+    .skill-tag button {
+        margin-left: 0.5rem;
+        color: #0369a1;
+        opacity: 0.5;
+    }
+    .skill-tag button:hover {
+        opacity: 1;
+    }
+</style>
+
+<!-- Main JavaScript -->
+
+{% endblock %}
