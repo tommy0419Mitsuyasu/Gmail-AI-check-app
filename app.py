@@ -6,7 +6,10 @@ from pathlib import Path
 import PyPDF2
 from datetime import datetime, timedelta
 from collections import defaultdict
-from skill_matcher import SkillMatcher
+from skill_extractor import SkillExtractor
+from skill_matcher import SkillMatcher  # SkillMatcher クラスをインポート
+import skill_matcher
+from skill_matcher_enhanced import enhance_skill_matching  # 新しいマッチング機能をインポート
 
 # 開発環境用の設定（本番環境では削除またはコメントアウト）
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
@@ -1587,23 +1590,22 @@ def find_matching_engineers(project_requirements: List[Dict[str, Any]], project_
     # 各エンジニアのマッチングを計算
     matched_engineers = []
     for engineer_id, skills in engineers_skills.items():
-        # マッチングを計算
-        result = skill_matcher.match_engineer_to_project(
-            engineer_skills=skills,
+        # 新しいマッチング機能を使用
+        result = enhance_skill_matching(
             project_requirements=project_requirements,
-            project_context=project_context
+            candidate_skills=skills
         )
         
         # マッチしたスキルの詳細を取得
         matched_skills_details = [
             {
-                'skill': m['required_skill'],
-                'matched_skill': m['matched_skill'],
-                'level': m['level'],
-                'experience': m['experience'],
-                'score': m['score']
+                'required_skill': m.get('required_skill', ''),
+                'matched_skill': m.get('matched_skill', ''),
+                'level': m.get('level', ''),
+                'score': m.get('score', 0),
+                'match_type': m.get('match_type', 'unknown')
             }
-            for m in result['matches']
+            for m in result.get('matches', [])
         ]
         
         # エンジニア情報を取得
@@ -1613,13 +1615,14 @@ def find_matching_engineers(project_requirements: List[Dict[str, Any]], project_
         # マッチング結果を追加
         matched_engineers.append({
             'engineer': engineer,
-            'match_score': result['match_ratio'],
-            'match_ratio': result['match_ratio'],
-            'matched_skills': [m['required_skill'] for m in result['matches']],
+            'match_score': result.get('match_ratio', 0),
+            'match_ratio': result.get('match_ratio', 0),
+            'matched_skills': [m.get('required_skill', '') for m in result.get('matches', []) if 'required_skill' in m],
             'matched_skills_details': matched_skills_details,
-            'missed_skills': result['missed_skills'],
+            'missed_skills': result.get('missed_skills', []),
             'total_required_skills': len(project_requirements),
-            'matched_skills_count': len(result['matches'])
+            'matched_skills_count': len(result.get('matches', [])),
+            'matching_algorithm': 'enhanced'  # 使用したマッチングアルゴリズムを記録
         })
     
     # マッチスコアの高い順にソート
