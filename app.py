@@ -1162,25 +1162,76 @@ def get_credentials_from_session() -> Credentials:
     return Credentials(**creds_dict)
 
 def search_gmail_emails(service, skills, normalized_skills):
-    """Gmailからメールを検索して案件情報を返す"""
+    """Gmailからメールを検索して案件情報を返す
+    
+    Args:
+        service: Gmail API サービスオブジェクト
+        skills: 検索対象のスキルリスト
+        normalized_skills: 正規化されたスキルリスト
+        
+    Returns:
+        案件情報のリスト（各案件は辞書形式）
+    """
     try:
+        # 除外するキーワード
+        EXCLUDE_KEYWORDS = [
+            # 人材関連
+            '人材情報', '個人事業主', 'フリーランス', 'エージェント',
+            'スカウト', '転職', '採用情報', '採用募集', '採用担当者様',
+            '人材紹介', 'エンジニア情報', '応募', '履歴書', '職務経歴書',
+            'レジュメ', 'CV', 'プロフィール', 'ご登録', 'ご案内',
+            # その他のノイズ
+            'メルマガ', 'ニュースレター', 'セミナー', 'イベント', '勉強会'
+        ]
+        
+        def should_exclude(subject: str, snippet: str) -> bool:
+            """除外すべきメールかどうかを判定"""
+            if not subject:
+                return True
+                
+            text = f"{subject} {snippet}".lower()
+            
+            # 除外キーワードのチェック
+            for keyword in EXCLUDE_KEYWORDS:
+                if keyword in text:
+                    return True
+            
+            # 特定のパターンに一致するメールを除外
+            exclude_patterns = [
+                r'\d{1,2}\/\d{1,2}\s*【.*】',  # 日付+【】形式の件名
+                r'^Re:|^Fw:',                       # 転送・返信メール
+                r'^\[.*\]',                         # 【】で始まる件名
+                r'^【.*】',                          # 【】で始まる件名（全角）
+                r'応募.*[0-9]',                     # 応募番号を含む
+                r'履歴書|職務経歴書'                 # 履歴書関連
+            ]
+            
+            for pattern in exclude_patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    return True
+            
+            return False
+
         # 検索クエリを作成
-        date_str = get_date_days_ago(2).strftime('%Y/%m/%d')
+        date_str = get_date_days_ago(30).strftime('%Y/%m/%d')  # 30日前まで遡る
         query_parts = [
-            f'(from:sales@artwize.co.jp OR to:sales@artwize.co.jp OR cc:sales@artwize.co.jp)',
+            'to:sales@artwize.co.jp',  # 送信先が自社のメールのみ
             f'after:{date_str}',
+            'in:inbox',                # 受信トレイのみ
+            '-has:attachment',          # 添付ファイルなし
             '(案件 OR 求人 OR 募集 OR プロジェクト)'
         ]
+        
         if skills:
             query_parts.append(f"({' OR '.join(skills)})")
         
         query = ' '.join(query_parts)
         
-        # メールを検索
+        # メールを検索（メタデータのみ取得）
         results = service.users().messages().list(
             userId='me',
             q=query,
-            maxResults=10
+            maxResults=20  # 最大20件に制限
         ).execute()
         
         messages = results.get('messages', [])
@@ -1191,46 +1242,27 @@ def search_gmail_emails(service, skills, normalized_skills):
         
         for msg in messages:
             try:
-                # メールの詳細を取得（本文も含める）
+                # メールの詳細を取得（メタデータのみ）
                 message = service.users().messages().get(
                     userId='me',
                     id=msg['id'],
-                    format='full'
+                    format='metadata',
+                    metadataHeaders=['From', 'To', 'Subject', 'Date']
                 ).execute()
                 
                 # メタデータから必要な情報を抽出
-                headers = {}
-                for header in message.get('payload', {}).get('headers', []):
-                    headers[header['name'].lower()] = header['value']
+                headers = {h['name'].lower(): h['value'] 
+                          for h in message.get('payload', {}).get('headers', [])}
                 
-                # メール本文を取得
-                email_body = ''
-                payload = message.get('payload', {})
-                if 'parts' in payload:
-                    for part in payload['parts']:
-                        if part['mimeType'] == 'text/plain' and 'body' in part and 'data' in part['body']:
-                            email_body += base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
-                elif 'body' in payload and 'data' in payload['body']:
-                    email_body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+                subject = headers.get('subject', '')
+                snippet = message.get('snippet', '')
                 
-                # 件名を取得してフィルタリング
-                subject = headers.get('subject', '').lower()
-                if any(keyword in subject for keyword in ['人材情報', '個人事業主', 'エンジニア情報', '人材紹介']):
+                # 除外すべきメールかチェック
+                if should_exclude(subject, snippet):
                     continue
                 
-                # 添付ファイルがあるかチェック
-                has_attachments = any(
-                    part.get('filename') 
-                    for part in message.get('payload', {}).get('parts', [])
-                    if part.get('filename')  # ファイル名があるパートのみをチェック
-                )
-                if has_attachments:
-                    continue
-                
-                # 件名と送信者を取得
-                subject = headers.get('subject', '(件名なし)')
-                sender = headers.get('from', '送信者不明')
-                date = headers.get('date', '')
+                # メール本文を取得（スニペットで代用）
+                email_body = snippet
                 
                 # 受信日時をフォーマット
                 email_date = headers.get('date', '')
@@ -1243,31 +1275,44 @@ def search_gmail_emails(service, skills, normalized_skills):
                 # 案件情報を作成
                 project = {
                     'id': message['id'],
-                    'name': headers.get('subject', '(件名なし)'),
+                    'name': subject or '(件名なし)',
                     'client_name': headers.get('from', '送信者不明'),
                     'date': email_date,
-                    'snippet': message.get('snippet', ''),
+                    'snippet': snippet,
                     'body': email_body,
-                    'source': 'gmail'
+                    'source': 'gmail',
+                    'matched_skills': [],
+                    'match_count': 0,
+                    'match_score': 0,
+                    'match_percentage': 0
                 }
                 
-                # スキルマッチング情報を追加（件名と本文の両方でマッチング）
-                search_text = f"{project['name']} {project['snippet']} {email_body}"
-                project['matched_skills'] = [s for s in normalized_skills if s.lower() in search_text.lower()]
+                # スキルマッチング情報を追加
+                search_text = f"{subject} {snippet} {email_body}".lower()
+                project['matched_skills'] = [
+                    s for s in normalized_skills 
+                    if s.lower() in search_text
+                ]
                 project['match_count'] = len(project['matched_skills'])
                 project['match_score'] = project['match_count']
-                project['match_percentage'] = min(project['match_count'] * 20, 100)  # 1スキルあたり20%と仮定
+                project['match_percentage'] = min(project['match_count'] * 20, 100)
                 
-                projects.append(project)
+                # マッチするスキルがある場合のみ追加
+                if project['match_count'] > 0:
+                    projects.append(project)
                 
             except Exception as e:
                 print(f"メールの処理中にエラーが発生しました: {e}")
                 continue
         
+        # マッチスコアの高い順にソート
+        projects.sort(key=lambda x: x['match_score'], reverse=True)
+        
         return projects
         
     except Exception as e:
         print(f"Gmail検索中にエラーが発生しました: {e}")
+        return []  # エラー時は空リストを返す
         raise
 
 # このエンドポイントは /api/projects に統合されました
@@ -1444,32 +1489,57 @@ def extract_email_info(service, msg_id):
         print(f"Error extracting email info: {e}")
         return None
 
-def extract_skills_from_email(body: str) -> List[Dict[str, Any]]:
-    """メール本文からスキルを抽出して詳細な情報を返す
+def extract_skills_from_email(body: str, min_confidence: float = 0.4) -> List[Dict[str, Any]]:
+    """メール本文からスキルを抽出して詳細な情報を返す（強化版）
     
     Args:
         body: メール本文
+        min_confidence: 採用する最小信頼度 (0.0-1.0)
         
     Returns:
-        抽出されたスキルのリスト。各スキルは辞書形式で、以下のキーを含む:
+        抽出されたスキルのリスト。各スキルは以下のキーを持つ辞書:
         - name: スキル名
         - confidence: 信頼度 (0.0-1.0)
-        - matched_terms: マッチした用語のリスト
+        - categories: カテゴリのリスト
+        - experience_years: 経験年数（推測）
+        - context: スキルが検出された文脈
     """
     if not body:
         return []
     
-    # スキルを抽出
-    skill_matches = skill_matcher.extract_skills_from_text(body)
+    # テキストを前処理（不要な改行やスペースを削除）
+    clean_body = ' '.join(body.split())
+    
+    # スキル抽出器を使用
+    extractor = SkillExtractor()
+    skills_data = extractor.extract_skills(clean_body)
     
     # 結果を整形
     extracted_skills = []
-    for skill, match in skill_matches.items():
-        extracted_skills.append({
-            'name': skill,
-            'confidence': match.confidence,
-            'matched_terms': match.matched_terms
-        })
+    added_skills = set()
+    
+    # カテゴリごとに処理
+    for category, skills in skills_data.items():
+        for skill_data in skills:
+            skill_name = skill_data['name']
+            
+            # 重複をスキップ
+            if skill_name.lower() in added_skills:
+                continue
+                
+            # 重要度が閾値以上のスキルのみを採用
+            if skill_data.get('importance', 0) >= min_confidence:
+                extracted_skills.append({
+                    'name': skill_name,
+                    'confidence': skill_data.get('importance', 0.5),
+                    'categories': skill_data.get('categories', []),
+                    'experience_years': skill_data.get('experience_years', 0),
+                    'context': skill_data.get('context', '')
+                })
+                added_skills.add(skill_name.lower())
+    
+    # 信頼度でソート（高い順）
+    extracted_skills.sort(key=lambda x: x['confidence'], reverse=True)
     
     return extracted_skills
 
@@ -1557,59 +1627,160 @@ def find_matching_engineers(project_requirements: List[Dict[str, Any]], project_
     
     return matched_engineers
 
-def extract_project_requirements(text: str) -> List[Dict[str, Any]]:
-    """テキストからプロジェクト要件を抽出する
+def detect_sections(text: str) -> Dict[str, str]:
+    """テキストからセクションを検出する"""
+    sections = {
+        'skills': '',
+        'experience': '',
+        'projects': '',
+        'education': '',
+        'certifications': '',
+        'other': ''
+    }
+    
+    # 簡単なキーワードベースのセクション検出
+    section_keywords = {
+        'skills': ['スキル', '技術', 'skills', 'technology'],
+        'experience': ['経験', '職務', 'work', 'experience'],
+        'projects': ['プロジェクト', '開発', 'project', 'development'],
+        'education': ['学歴', '教育', 'education'],
+        'certifications': ['資格', '認定', 'certification']
+    }
+    
+    # テキストを行に分割
+    lines = text.split('\n')
+    current_section = 'other'
+    
+    for line in lines:
+        line_lower = line.lower().strip()
+        
+        # セクションヘッダーを検出
+        for section, keywords in section_keywords.items():
+            if any(keyword in line_lower for keyword in keywords):
+                current_section = section
+                break
+        
+        # 現在のセクションにテキストを追加
+        sections[current_section] += line + ' '
+    
+    return sections
+
+def estimate_experience_years(skill_data: Dict[str, Any], context: str) -> float:
+    """経験年数を推定する"""
+    # スキルデータから経験年数を取得
+    exp_years = skill_data.get('experience_years', 0)
+    
+    # コンテキストから経験年数を推定
+    year_matches = re.findall(r'(\d+)\s*年', context)
+    if year_matches:
+        exp_years = max(exp_years, float(year_matches[0]))
+    
+    return exp_years
+
+def determine_skill_level(exp_years: float, skill_data: Dict[str, Any]) -> str:
+    """スキルレベルを決定する"""
+    if exp_years >= 5:
+        return 'リード'
+    elif exp_years >= 3:
+        return '上級'
+    elif exp_years >= 1:
+        return '中級'
+    else:
+        return '初級'
+
+def find_related_skills(skill_name: str, skills_data: Dict[str, List[Dict]]):
+    """関連するスキルを見つける"""
+    related = set()
+    
+    # 同じカテゴリのスキルを関連スキルとして追加
+    for category, skills in skills_data.items():
+        for skill in skills:
+            if skill['name'] != skill_name:
+                related.add(skill['name'])
+    
+    return list(related)
+
+def extract_project_requirements(text: str, min_confidence: float = 0.4) -> List[Dict[str, Any]]:
+    """テキストからプロジェクト要件を抽出する（強化版）
     
     Args:
         text: 抽出元のテキスト
+        min_confidence: 採用する最小信頼度 (0.0-1.0)
         
     Returns:
         プロジェクト要件のリスト。各要件は以下のキーを持つ辞書:
         - skill: スキル名
-        - level: 必要とされるレベル (オプション)
-        - weight: 重み (デフォルト: 1.0)
+        - level: 必要とされるレベル (初級/中級/上級/リード)
+        - weight: 重み (0.0-1.0)
+        - categories: スキルのカテゴリリスト
+        - experience_years: 経験年数
+        - context: スキルが使用された文脈
+        - related_skills: 関連するスキルのリスト
     """
     if not text:
         return []
-        
-    # スキルを抽出
-    extracted_skills = extract_skills_from_email(text)
     
-    # 要件に変換
+    # テキストを前処理（不要な改行やスペースを削除）
+    clean_text = ' '.join(text.split())
+    
+    # セクションを検出
+    sections = detect_sections(clean_text)
+    
+    # スキル抽出器を使用して詳細なスキル情報を取得
+    extractor = SkillExtractor()
+    
+    # プロジェクト要件に変換
     requirements = []
-    skill_names = set()  # 重複を避けるため
+    added_skills = set()  # 重複を防ぐため
     
-    for skill_info in extracted_skills:
-        skill_name = skill_info['name']
+    # セクションごとに処理
+    for section_type, section_text in sections.items():
+        # セクションタイプに基づいて重みを調整
+        section_weight = {
+            'skills': 1.0,
+            'experience': 0.9,
+            'projects': 0.8,
+            'education': 0.6,
+            'certifications': 0.7,
+            'other': 0.5
+        }.get(section_type, 0.5)
         
-        # 重複をスキップ
-        if skill_name.lower() in skill_names:
-            continue
-            
-        skill_names.add(skill_name.lower())
+        # スキルを抽出
+        skills_data = extractor.extract_skills(section_text)
         
-        # レベルを抽出
-        level = None
-        if re.search(rf'(上級|シニア|リード|senior|lead|expert).*{re.escape(skill_name)}', text, re.IGNORECASE):
-            level = 'senior'
-        elif re.search(rf'(中級|ミドル|middle|intermediate).*{re.escape(skill_name)}', text, re.IGNORECASE):
-            level = 'mid'
-        elif re.search(rf'(初級|ジュニア|junior|entry).*{re.escape(skill_name)}', text, re.IGNORECASE):
-            level = 'junior'
-        
-        # 重みを計算
-        weight = 1.0
-        if re.search(rf'(必須|必要|must have|required).*{re.escape(skill_name)}', text, re.IGNORECASE):
-            weight = 1.5
-        elif re.search(rf'(優遇|歓迎|plus|preferred).*{re.escape(skill_name)}', text, re.IGNORECASE):
-            weight = 1.2
-        
-        requirements.append({
-            'skill': skill_name,
-            'level': level,
-            'weight': weight,
-            'confidence': skill_info.get('confidence', 0.7)  # デフォルト値
-        })
+        # スキルを処理
+        for category, skills in skills_data.items():
+            for skill_data in skills:
+                skill_name = skill_data['name']
+                
+                # 重複をスキップ
+                skill_key = f"{skill_name.lower()}_{category.lower()}"
+                if skill_key in added_skills:
+                    continue
+                
+                # 重要度が閾値以上のスキルのみを採用
+                importance = skill_data.get('importance', 0) * section_weight
+                if importance >= min_confidence:
+                    # 経験年数からレベルを推測
+                    exp_years = estimate_experience_years(skill_data, section_text)
+                    level = determine_skill_level(exp_years, skill_data)
+                    
+                    # 関連スキルを取得
+                    related_skills = find_related_skills(skill_name, skills_data)
+                    
+                    requirements.append({
+                        'skill': skill_name,
+                        'level': level,
+                        'weight': importance,
+                        'categories': skill_data.get('categories', []) + [category],
+                        'experience_years': exp_years,
+                        'context': skill_data.get('context', ''),
+                        'related_skills': related_skills
+                    })
+                    added_skills.add(skill_key)
+    
+    # 重みでソート（重みの高い順）
+    requirements.sort(key=lambda x: x['weight'], reverse=True)
     
     return requirements
 

@@ -139,31 +139,43 @@ class SkillExtractor:
         skills_found = []
         text_lower = text.lower()
         
-        # 1. 既知のスキルを直接マッチング
-        for skill, data in self.skill_db.items():
-            # スキル名とエイリアスで検索
-            patterns = [skill.lower()] + [a.lower() for a in data.get('aliases', [])]
+        # 1. スキルセクションを特定する
+        skill_sections = self._find_skill_sections(text)
+        
+        # 2. スキルセクション内でのみスキルを抽出
+        for section in skill_sections:
+            section_text = section['text']
+            section_lower = section_text.lower()
             
-            for pattern in patterns:
-                for match in re.finditer(r'\b' + re.escape(pattern) + r'\b', text_lower):
-                    start, end = match.span()
-                    context = self._get_context(text, start, end)
-                    
-                    # スキルの重要度を計算
-                    importance = self._calculate_importance(skill, context)
-                    
-                    # 経験年数を抽出
-                    experience = self._extract_experience(context, skill)
-                    
-                    skills_found.append({
-                        'skill': skill,
-                        'type': data['type'],
-                        'context': context,
-                        'importance': importance,
-                        'experience_years': experience,
-                        'categories': data.get('categories', []),
-                        'related_skills': data.get('related', [])
-                    })
+            # 3. 既知のスキルを直接マッチング
+            for skill, data in self.skill_db.items():
+                # スキル名とエイリアスで検索
+                patterns = [skill.lower()] + [a.lower() for a in data.get('aliases', [])]
+                
+                for pattern in patterns:
+                    for match in re.finditer(r'\b' + re.escape(pattern) + r'\b', section_lower):
+                        start, end = match.span()
+                        context = self._get_context(section_text, start, end)
+                        
+                        # スキルの重要度を計算
+                        importance = self._calculate_importance(skill, context)
+                        
+                        # 経験年数を抽出
+                        experience = self._extract_experience(context, skill)
+                        
+                        # スキルが既に追加されていないか確認
+                        skill_exists = any(s['skill'] == skill for s in skills_found)
+                        
+                        if not skill_exists:
+                            skills_found.append({
+                                'skill': skill,
+                                'type': data['type'],
+                                'context': context,
+                                'importance': importance,
+                                'experience_years': experience,
+                                'categories': data.get('categories', []),
+                                'related_skills': data.get('related', [])
+                            })
         
         # 2. 大文字で始まる専門用語を抽出（新規スキルの検出）
         words = re.findall(r'(?:^|\s)([A-Z][a-z]+(?:[A-Z][a-z]+)*)', text)
@@ -188,14 +200,71 @@ class SkillExtractor:
         context_end = min(len(text), end + window)
         return text[context_start:context_end].strip()
     
+    def _find_skill_sections(self, text: str) -> List[Dict]:
+        """スキルが記載されているセクションを特定する"""
+        sections = []
+        
+        # スキルが記載されていそうな見出しを検索
+        skill_headers = [
+            r'スキル',
+            r'技術スタック',
+            r'開発経験',
+            r'技術スキル',
+            r'得意技術',
+            r'経験技術',
+            r'使用技術',
+            r'開発環境',
+            r'プログラミング言語',
+            r'フレームワーク',
+            r'ツール',
+            r'インフラ',
+            r'データベース'
+        ]
+        
+        # 改行で分割して見出しを探す
+        lines = text.split('\n')
+        current_section = None
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+                
+            # 見出しのパターンにマッチするか確認
+            for header in skill_headers:
+                if re.search(header, line, re.IGNORECASE):
+                    # 新しいセクションを開始
+                    if current_section is not None:
+                        sections.append(current_section)
+                    current_section = {
+                        'header': line,
+                        'text': '',
+                        'start': i
+                    }
+                    break
+            
+            # 現在のセクションにテキストを追加
+            if current_section is not None and not any(h in line.lower() for h in ['http', 'mailto:', '@']):
+                current_section['text'] += ' ' + line
+        
+        # 最後のセクションを追加
+        if current_section is not None:
+            sections.append(current_section)
+        
+        # スキルセクションが見つからない場合は全文を1つのセクションとして扱う
+        if not sections:
+            return [{'text': text, 'header': 'All Text', 'start': 0}]
+            
+        return sections
+    
     def _calculate_importance(self, skill: str, context: str) -> float:
         """スキルの重要度を計算"""
         score = 0.0
         context_lower = context.lower()
         
-        # 出現回数
+        # 出現回数（重みを下げる）
         count = context_lower.count(skill.lower())
-        score += min(count * 0.2, 1.0)  # 最大1.0
+        score += min(count * 0.1, 0.5)  # 最大0.5
         
         # 大文字表記（固有名詞としての重要度）
         if skill[0].isupper() and skill in context:
