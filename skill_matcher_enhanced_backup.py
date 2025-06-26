@@ -2,27 +2,6 @@
 import re
 from typing import List, Dict, Any, Set, Tuple, Optional
 from difflib import SequenceMatcher
-from collections import defaultdict
-
-# ドメインとスキルの関連性を定義
-DOMAIN_SKILLS = {
-    'java_backend': ['java', 'spring', 'spring boot', 'hibernate', 'jpa', 'junit', 'maven', 'gradle'],
-    'python_backend': ['python', 'django', 'flask', 'fastapi', 'sqlalchemy'],
-    'frontend': ['javascript', 'typescript', 'react', 'vue', 'angular', 'html', 'css', 'sass'],
-    'devops': ['docker', 'kubernetes', 'jenkins', 'github actions', 'gitlab ci'],
-    'cloud': ['aws', 'azure', 'gcp', 'terraform', 'cloudformation'],
-    'data_science': ['python', 'pandas', 'numpy', 'tensorflow', 'pytorch', 'scikit-learn'],
-    'mobile': ['swift', 'kotlin', 'flutter', 'react native', 'ios', 'android']
-}
-
-# ドメイン間の関連性を定義（0.0-1.0の値で関連性の強さを表現）
-DOMAIN_RELATIONSHIPS = {
-    ('java_backend', 'devops'): 0.4,
-    ('java_backend', 'cloud'): 0.5,
-    ('python_backend', 'data_science'): 0.7,
-    ('python_backend', 'devops'): 0.5,
-    ('frontend', 'mobile'): 0.6
-}
 
 def levenshtein_ratio(s1: str, s2: str) -> float:
     """文字列の類似度を計算する（0.0 〜 1.0）
@@ -256,84 +235,6 @@ def calculate_level_score(candidate_level: str, required_level: str, is_related:
         else:
             return 0.5 + (cand_idx / (req_idx + 1)) * 0.5  # 0.5-1.0の範囲で調整
 
-def identify_primary_domains(skills: List[Dict]) -> Dict[str, float]:
-    """スキルリストから専門分野を特定"""
-    domain_scores = defaultdict(float)
-    
-    for skill in skills:
-        skill_name = skill.get('name', '').lower()
-        skill_level = skill.get('level', '中級')
-        
-        # スキルレベルを数値に変換
-        level_scores = {'初級': 0.5, '中級': 1.0, '上級': 1.5, 'リード': 2.0}
-        level_score = level_scores.get(skill_level, 1.0)
-        
-        # スキルが属するドメインを特定
-        for domain, domain_skills in DOMAIN_SKILLS.items():
-            for domain_skill in domain_skills:
-                if calculate_skill_similarity(skill_name, domain_skill) > 0.8:
-                    domain_scores[domain] += level_score
-                    break
-    
-    # スコアを正規化
-    total = sum(domain_scores.values())
-    if total > 0:
-        return {k: v/total for k, v in domain_scores.items()}
-    return {}
-
-def calculate_domain_match(candidate_domains: Dict[str, float], 
-                         project_domains: Dict[str, float]) -> float:
-    """候補者と案件のドメイン一致度を計算"""
-    if not candidate_domains or not project_domains:
-        return 0.0
-    
-    total_score = 0.0
-    
-    for c_domain, c_score in candidate_domains.items():
-        for p_domain, p_score in project_domains.items():
-            if c_domain == p_domain:
-                # 完全一致
-                total_score += c_score * p_score
-            else:
-                # ドメイン間の関連性を考慮
-                relationship = DOMAIN_RELATIONSHIPS.get(
-                    tuple(sorted([c_domain, p_domain])), 0.0)
-                total_score += c_score * p_score * relationship * 0.7
-    
-    return min(total_score, 1.0)
-
-def calculate_domain_expertise(skills: List[Dict]) -> Dict[str, float]:
-    """スキルリストからドメイン専門性を計算
-    
-    Args:
-        skills: スキルリスト [{'name': 'Java', 'level': '上級', ...}, ...]
-        
-    Returns:
-        ドメイン別の専門性スコア (0.0-1.0)
-    """
-    domain_scores = defaultdict(float)
-    
-    for skill in skills:
-        skill_name = skill.get('name', '').lower()
-        skill_level = skill.get('level', '中級').lower()
-        
-        # スキルレベルを数値に変換
-        level_score = {
-            '初心者': 0.3, '初級': 0.5, '中級': 0.7, 
-            '上級': 0.9, 'エキスパート': 1.0, 'expert': 1.0
-        }.get(skill_level, 0.5)
-        
-        # ドメインにスコアを加算
-        for domain, domain_skills in DOMAIN_SKILLS.items():
-            if any(skill_similarity(skill_name, s) > 0.8 for s in domain_skills):
-                domain_scores[domain] += level_score
-    
-    # 正規化
-    total = sum(domain_scores.values())
-    if total > 0:
-        return {k: v/total for k, v in domain_scores.items()}
-    return {}
-
 def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: List[Dict]) -> Dict:
     """スキルマッチングを強化する
     
@@ -350,29 +251,12 @@ def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: L
             'missed_skills': [req['skill'] for req in project_requirements] if project_requirements else [],
             'match_ratio': 0.0,
             'total_score': 0.0,
-            'max_possible_score': 0.0,
-            'domain_expertise': {}
+            'max_possible_score': 0.0
         }
-    
-    # 候補者とプロジェクトの専門性を計算
-    candidate_domains = calculate_domain_expertise(candidate_skills)
-    project_domains = calculate_domain_expertise(project_requirements)
-    
-    # ドメインの一致度を計算
-    domain_match_score = 0.0
-    if candidate_domains and project_domains:
-        # 共通のドメインがあればスコアを計算
-        common_domains = set(candidate_domains.keys()) & set(project_domains.keys())
-        if common_domains:
-            # 共通ドメインのスコアの平均
-            domain_match_score = sum(
-                min(candidate_domains[d], project_domains[d]) 
-                for d in common_domains
-            ) / len(common_domains) if common_domains else 0.0
     
     # 候補スキルを正規化して辞書に格納
     normalized_candidate_skills = {}
-    original_skill_names = {}
+    original_skill_names = {}  # 正規化前のスキル名を保持
     
     for skill_data in candidate_skills:
         name = skill_data.get('name', '')
@@ -387,13 +271,11 @@ def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: L
         if normalized not in normalized_candidate_skills or \
            (skill_data.get('level') and skill_data['level'] > normalized_candidate_skills[normalized].get('level', '')):
             normalized_candidate_skills[normalized] = skill_data
-            original_skill_names[normalized] = name
+            original_skill_names[normalized] = name  # 正規化前の名前を保持
     
     # マッチング結果を格納するリスト
     matches = []
     matched_skills = set()
-    total_score = 0.0
-    max_possible_score = 0.0
     
     # 各プロジェクト要件に対してマッチングを実行
     for req in project_requirements:
@@ -405,195 +287,78 @@ def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: L
         if not req_skill_normalized:  # 正規化後に空になる場合はスキップ
             continue
             
-        req_weight = req.get('weight', 1.0)
-        max_possible_score += req_weight
-        
         # 1. 完全一致をチェック
         if req_skill_normalized in normalized_candidate_skills:
             candidate_data = normalized_candidate_skills[req_skill_normalized]
-            
-            # スキルのドメインを取得
-            skill_domains = [
-                domain for domain, skills in DOMAIN_SKILLS.items()
-                if any(skill_similarity(req_skill_normalized, s) > 0.8 for s in skills)
-            ]
-            
-            # ドメイン一致スコアを計算
-            domain_score = 0.0
-            if skill_domains and domain_match_score > 0:
-                domain_score = max(
-                    candidate_domains.get(domain, 0) * project_domains.get(domain, 0)
-                    for domain in skill_domains
-                    if domain in candidate_domains and domain in project_domains
-                )
+            weight = req.get('weight', 1.0)
+            level = candidate_data.get('level', '')
             
             # レベルの一致度を考慮したスコア計算
-            level_score = calculate_level_score(
-                candidate_data.get('level', ''), 
-                req.get('level', ''), 
-                is_related=False
-            )
-            
-            # スコアを計算（スキル: 70%, レベル: 20%, ドメイン: 10% の重み）
-            skill_score = (1.0 * 0.7) + (level_score * 0.2) + (domain_score * 0.1)
-            weighted_score = skill_score * req_weight
+            level_score = calculate_level_score(level, req.get('level', ''), is_related=False)
             
             matches.append({
                 'required_skill': req_skill,
                 'matched_skill': original_skill_names.get(req_skill_normalized, req_skill_normalized),
-                'level': candidate_data.get('level', ''),
+                'level': level,
                 'required_level': req.get('level', ''),
-                'score': weighted_score,
-                'weight': req_weight,
-                'match_type': 'exact',
-                'domain_score': domain_score,
-                'level_score': level_score
+                'score': weight * level_score,
+                'weight': weight,
+                'match_type': 'exact'
             })
             matched_skills.add(req_skill_normalized)
-            total_score += weighted_score
             continue
             
         # 2. 類似度が高いスキルをチェック
         best_similarity = 0.7  # 類似度の閾値
         best_match = None
         best_original_name = None
-        best_domain_score = 0.0
-        
-        # スキルのドメインを取得
-        req_skill_domains = [
-            domain for domain, skills in DOMAIN_SKILLS.items()
-            if any(skill_similarity(req_skill_normalized, s) > 0.8 for s in skills)
-        ]
         
         for cand_skill, cand_data in normalized_candidate_skills.items():
-            # スキルの類似度を計算
             similarity = calculate_skill_similarity(req_skill_normalized, cand_skill)
-            
-            # 類似度が閾値未満の場合はスキップ
-            if similarity < best_similarity:
-                continue
-                
-            # ドメイン一致スコアを計算
-            domain_score = 0.0
-            if req_skill_domains and domain_match_score > 0:
-                # 候補スキルのドメインを取得
-                cand_domains = [
-                    domain for domain, skills in DOMAIN_SKILLS.items()
-                    if any(skill_similarity(cand_skill, s) > 0.8 for s in skills)
-                ]
-                
-                # 共通のドメインがあればスコアを計算
-                common_domains = set(req_skill_domains) & set(cand_domains)
-                if common_domains:
-                    domain_score = max(
-                        min(candidate_domains.get(d, 0), project_domains.get(d, 0))
-                        for d in common_domains
-                        if d in candidate_domains and d in project_domains
-                    )
-            
-            # スコアを計算（類似度: 60%, ドメイン: 20%, レベル: 20% の重み）
-            level_score = calculate_level_score(
-                cand_data.get('level', ''), 
-                req.get('level', ''), 
-                is_related=True
-            )
-            
-            # 総合スコア
-            total_score_candidate = (similarity * 0.6) + (domain_score * 0.2) + (level_score * 0.2)
-            
-            # 最高スコアを更新
-            if total_score_candidate > best_similarity:
-                best_similarity = total_score_candidate
+            if similarity > best_similarity:
+                best_similarity = similarity
                 best_match = cand_data
                 best_original_name = original_skill_names.get(cand_skill, cand_skill)
-                best_domain_score = domain_score
         
         if best_match:
-            weight = req.get('weight', 1.0) * best_similarity
-            weighted_score = best_similarity * weight
+            weight = req.get('weight', 1.0) * best_similarity  # 類似度に応じて重みを調整
+            level_score = calculate_level_score(best_match.get('level', ''), req.get('level', ''), is_related=True)
             
             matches.append({
                 'required_skill': req_skill,
                 'matched_skill': f"{best_original_name} (類似度: {best_similarity:.1%})",
                 'level': best_match.get('level', ''),
                 'required_level': req.get('level', ''),
-                'score': weighted_score,
+                'score': weight * level_score,
                 'weight': weight,
                 'match_type': 'similar',
-                'similarity': best_similarity,
-                'domain_score': best_domain_score,
-                'level_score': calculate_level_score(
-                    best_match.get('level', ''), 
-                    req.get('level', ''), 
-                    is_related=True
-                )
+                'similarity': best_similarity
             })
             matched_skills.add(req_skill_normalized)
-            total_score += weighted_score
             continue
             
-        # 3. 関連スキルをチェック（専門性を考慮）
+        # 3. 関連スキルをチェック
         related_skills = get_related_skills(req_skill_normalized)
-        best_related_score = 0.0
-        best_related_match = None
-        
         for related_skill in related_skills:
             if related_skill in normalized_candidate_skills:
                 candidate_data = normalized_candidate_skills[related_skill]
+                weight = req.get('weight', 1.0) * 0.6  # 関連スキルの場合は重みを下げる
                 
-                # 関連スキルのドメインを取得
-                related_domains = [
-                    domain for domain, skills in DOMAIN_SKILLS.items()
-                    if any(skill_similarity(related_skill, s) > 0.8 for s in skills)
-                ]
+                # レベルの一致度を考慮したスコア計算（関連スキルはベーススコアが低い）
+                level_score = calculate_level_score(candidate_data.get('level', ''), req.get('level', ''), is_related=True)
                 
-                # ドメイン一致スコアを計算
-                domain_score = 0.0
-                if related_domains and domain_match_score > 0:
-                    domain_score = max(
-                        min(candidate_domains.get(d, 0), project_domains.get(d, 0))
-                        for d in related_domains
-                        if d in candidate_domains and d in project_domains
-                    )
-                
-                # レベルの一致度を考慮
-                level_score = calculate_level_score(
-                    candidate_data.get('level', ''), 
-                    req.get('level', ''), 
-                    is_related=True
-                )
-                
-                # 関連スキルのスコア（類似度は固定で0.5、ドメイン: 30%, レベル: 20% の重み）
-                related_score = (0.5 * 0.5) + (domain_score * 0.3) + (level_score * 0.2)
-                
-                # 最高スコアの関連スキルを記録
-                if related_score > best_related_score:
-                    best_related_score = related_score
-                    best_related_match = {
-                        'data': candidate_data,
-                        'skill_name': related_skill,
-                        'domain_score': domain_score,
-                        'level_score': level_score
-                    }
-        
-        # 関連スキルが見つかった場合（閾値: 0.3）
-        if best_related_match and best_related_score >= 0.3:
-            weight = req.get('weight', 1.0) * best_related_score * 0.7  # 関連スキルは重みを下げる
-            weighted_score = best_related_score * weight
-            
-            matches.append({
-                'required_skill': req_skill,
-                'matched_skill': f"{original_skill_names.get(best_related_match['skill_name'], best_related_match['skill_name'])} (関連スキル)",
-                'level': best_related_match['data'].get('level', ''),
-                'required_level': req.get('level', ''),
-                'score': weighted_score,
-                'weight': weight,
-                'match_type': 'related',
-                'domain_score': best_related_match['domain_score'],
-                'level_score': best_related_match['level_score']
-            })
-            matched_skills.add(req_skill_normalized)
-            total_score += weighted_score
+                matches.append({
+                    'required_skill': req_skill,
+                    'matched_skill': f"{original_skill_names.get(related_skill, related_skill)} (関連スキル)",
+                    'level': candidate_data.get('level', ''),
+                    'required_level': req.get('level', ''),
+                    'score': weight * level_score,
+                    'weight': weight,
+                    'match_type': 'related',
+                    'context': req.get('context', '')
+                })
+                matched_skills.add(related_skill)
+                break
     
     # マッチング結果をスコアの高い順にソート
     matches.sort(key=lambda x: x['score'], reverse=True)
@@ -604,37 +369,15 @@ def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: L
         if req.get('skill') and normalize_skill(req['skill']) not in matched_skills
     ]
     
-    # 最終的なマッチ率を計算（スキルマッチ: 70%, ドメインマッチ: 30% の重み）
-    skill_match_ratio = (total_score / max_possible_score) if max_possible_score > 0 else 0
-    final_score = (skill_match_ratio * 0.7) + (domain_match_score * 0.3)
-    match_ratio = final_score * 100
-    
-    # 候補者の専門性トップ3を取得
-    top_domains = sorted(
-        candidate_domains.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )[:3]
-    
-    # プロジェクトの要求専門性トップ3を取得
-    top_project_domains = sorted(
-        project_domains.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )[:3] if project_domains else []
+    # マッチ率を計算
+    total_score = sum(match['score'] for match in matches)
+    max_possible_score = sum(req.get('weight', 1.0) for req in project_requirements if req.get('skill'))
+    match_ratio = (total_score / max_possible_score) * 100 if max_possible_score > 0 else 0
     
     return {
         'matches': matches,
         'missed_skills': missed_skills,
         'match_ratio': round(match_ratio, 1),
         'total_score': round(total_score, 2),
-        'max_possible_score': round(max_possible_score, 2),
-        'domain_scores': {
-            'candidate': dict(top_domains),
-            'project': dict(top_project_domains) if project_domains else {},
-            'match_score': round(domain_match_score, 2)
-        },
-        'skill_match_score': round(skill_match_ratio * 100, 1),
-        'domain_match_score': round(domain_match_score * 100, 1),
-        'final_score': round(match_ratio, 1)
+        'max_possible_score': round(max_possible_score, 2)
     }

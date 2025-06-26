@@ -5,9 +5,31 @@
 - スキルの重要度スコアリング
 """
 import re
+import os
 from typing import Dict, List, Set, Optional, Any, Tuple
 from collections import defaultdict
 import math
+import logging
+
+# Rezume Parser をインポート
+try:
+    from rezume_parser import RezumeParser
+    REZUME_PARSER_AVAILABLE = True
+except ImportError as e:
+    REZUME_PARSER_AVAILABLE = False
+    logging.warning(f"Rezume Parser が利用できません: {str(e)}")
+    logging.warning("pip install nltk を実行してインストールしてください。")
+
+# 外部モジュールのインポート
+try:
+    from .external_skill_service import external_skill_service
+except ImportError:
+    # 相対インポートに失敗した場合は絶対パスで再試行
+    try:
+        from external_skill_service import external_skill_service
+    except ImportError:
+        logging.warning("外部スキルサービスモジュールのインポートに失敗しました。外部スキル機能は無効化されます。")
+        external_skill_service = None
 
 # スキルの重要度キーワード
 IMPORTANCE_KEYWORDS = {
@@ -104,9 +126,29 @@ for skill, data in SKILL_DB.items():
         ALIAS_MAP[alias.lower()] = skill
 
 class SkillExtractor:
-    def __init__(self):
+    def __init__(self, enable_external_skills: bool = False):
+        """
+        スキル抽出器の初期化
+        
+        Args:
+            enable_external_skills: 外部スキルサービスを有効にするかどうか
+        """
         self.skill_db = SKILL_DB
         self.alias_map = ALIAS_MAP
+        self.enable_external_skills = enable_external_skills
+        self.external_service = external_skill_service if external_skill_service and enable_external_skills else None
+        
+        # Rezume Parser の初期化
+        self.rezume_parser = RezumeParser() if REZUME_PARSER_AVAILABLE else None
+        if self.rezume_parser:
+            logging.info("Rezume Parser が有効化されました。")
+        else:
+            logging.warning("Rezume Parser は無効です。スキル抽出は基本機能のみが使用されます。")
+        
+        if self.enable_external_skills and not self.external_service:
+            logging.warning("外部スキルサービスが有効ですが、初期化に失敗しました。外部スキル機能は無効化されます。")
+            self.enable_external_skills = False
+            
         self._build_skill_index()
     
     def _build_skill_index(self):
@@ -144,7 +186,11 @@ class SkillExtractor:
         
         # 2. スキルセクション内でのみスキルを抽出
         for section in skill_sections:
-            section_text = section['text']
+            # セクションに必要なキーがあるか確認
+            if not isinstance(section, dict) or 'text' not in section:
+                continue
+                
+            section_text = section.get('text', '')
             section_lower = section_text.lower()
             
             # 3. 既知のスキルを直接マッチング
@@ -201,61 +247,100 @@ class SkillExtractor:
         return text[context_start:context_end].strip()
     
     def _find_skill_sections(self, text: str) -> List[Dict]:
-        """スキルが記載されているセクションを特定する"""
+        """スキルが記載されているセクションを特定する
+        
+        Args:
+            text: 検索対象のテキスト
+            
+        Returns:
+            セクションのリスト。各セクションは以下のキーを持つ辞書:
+            - text: セクションのテキスト
+            - type: セクションのタイプ（'skills', 'experience' など）
+        """
+        if not text:
+            return [{'text': '', 'type': 'full_text'}]
+            
         sections = []
         
-        # スキルが記載されていそうな見出しを検索
+        # スキル関連の見出しパターン
         skill_headers = [
             r'スキル',
-            r'技術スタック',
-            r'開発経験',
-            r'技術スキル',
-            r'得意技術',
+            r'技術',
+            r'資格',
+            r'できること',
+            r'得意',
             r'経験技術',
-            r'使用技術',
-            r'開発環境',
-            r'プログラミング言語',
-            r'フレームワーク',
-            r'ツール',
-            r'インフラ',
-            r'データベース'
+            r'skills?',
+            r'qualifications?',
+            r'certifications?',
+            r'technologies?',
+            r'abilities',
+            r'competencies'
         ]
         
-        # 改行で分割して見出しを探す
-        lines = text.split('\n')
-        current_section = None
+        # 経験関連の見出しパターン
+        exp_headers = [
+            r'経験',
+            r'職務経歴',
+            r'職歴',
+            r'経験業務',
+            r'実務経験',
+            r'experience',
+            r'work history',
+            r'employment',
+            r'professional experience',
+            r'work experience'
+        ]
         
-        for i, line in enumerate(lines):
+        # セクションを分割
+        lines = text.split('\n')
+        current_section = []
+        current_type = 'other'
+        
+        for line in lines:
             line = line.strip()
             if not line:
                 continue
                 
-            # 見出しのパターンにマッチするか確認
-            for header in skill_headers:
-                if re.search(header, line, re.IGNORECASE):
-                    # 新しいセクションを開始
-                    if current_section is not None:
-                        sections.append(current_section)
-                    current_section = {
-                        'header': line,
-                        'text': '',
-                        'start': i
-                    }
-                    break
+            # セクションヘッダーを検出
+            is_skill_header = any(re.search(pat, line, re.IGNORECASE) for pat in skill_headers)
+            is_exp_header = any(re.search(pat, line, re.IGNORECASE) for pat in exp_headers)
             
-            # 現在のセクションにテキストを追加
-            if current_section is not None and not any(h in line.lower() for h in ['http', 'mailto:', '@']):
-                current_section['text'] += ' ' + line
+            if is_skill_header or is_exp_header:
+                # 現在のセクションを保存
+                if current_section:
+                    sections.append({
+                        'text': '\n'.join(current_section),
+                        'type': current_type
+                    })
+                
+                # 新しいセクションを開始
+                current_section = [line]
+                current_type = 'skills' if is_skill_header else 'experience'
+            else:
+                current_section.append(line)
         
         # 最後のセクションを追加
-        if current_section is not None:
-            sections.append(current_section)
+        if current_section:
+            sections.append({
+                'text': '\n'.join(current_section),
+                'type': current_type
+            })
         
-        # スキルセクションが見つからない場合は全文を1つのセクションとして扱う
-        if not sections:
-            return [{'text': text, 'header': 'All Text', 'start': 0}]
+        # スキルセクションがない場合は全文を1つのセクションとして扱う
+        if not sections or not any(s.get('type') == 'skills' for s in sections):
+            return [{'text': text, 'type': 'full_text'}]
+        
+        # 各セクションに必要なキーが存在することを確認
+        valid_sections = []
+        for section in sections:
+            if 'text' in section and 'type' in section:
+                valid_sections.append({
+                    'text': section['text'],
+                    'type': section['type']
+                })
             
-        return sections
+        return valid_sections if valid_sections else [{'text': text, 'type': 'full_text'}]
     
     def _calculate_importance(self, skill: str, context: str) -> float:
         """スキルの重要度を計算"""
@@ -281,6 +366,73 @@ class SkillExtractor:
             
         return min(score, 1.0)  # 最大1.0に正規化
     
+    def extract_skills(self, text: str, use_rezume: bool = True, use_external: bool = None) -> Dict[str, List[Dict]]:
+        """
+        テキストからスキルを抽出
+        
+        Args:
+            text: 抽出元のテキスト
+            use_rezume: Rezume Parser を使用するかどうか
+            use_external: 外部サービスを使用するかどうか（Noneの場合は設定に従う）
+            
+        Returns:
+            カテゴリ別に分類されたスキルの辞書
+        """
+        if not text.strip():
+            return {}
+            
+        # テキストの前処理
+        text = self.preprocess_text(text)
+        
+        # スキル候補を抽出
+        candidate_skills = self.extract_candidate_skills(text)
+        
+        # Rezume Parser を使用する場合
+        if use_rezume and self.rezume_parser:
+            try:
+                parsed_data = self.rezume_parser.parse_resume(text)
+                for skill in parsed_data.get('skills', []):
+                    skill_name = skill.get('name', '')
+                    if skill_name and not any(s['skill'].lower() == skill_name.lower() for s in candidate_skills):
+                        candidate_skills.append({
+                            'skill': skill_name,
+                            'type': skill.get('type', 'TECH'),
+                            'context': '',
+                            'importance': 0.7,  # デフォルトの重要度
+                            'experience_years': parsed_data.get('experience_years', 0)
+                        })
+                logging.info(f"Rezume Parser により {len(parsed_data.get('skills', []))} 個のスキルを追加")
+            except Exception as e:
+                logging.error(f"Rezume Parser の使用中にエラーが発生しました: {str(e)}")
+        
+        # 外部サービスを使用する場合
+        if (use_external is None and self.enable_external_skills) or use_external:
+            if self.external_service and self.external_service.enabled:
+                try:
+                    # 外部サービスから関連スキルを取得
+                    enhanced_skills = self.external_service.enhance_skill_extraction(
+                        candidate_skills, text
+                    )
+                    # 重複を避けてスキルを追加
+                    skill_names = {s["skill"].lower() for s in candidate_skills}
+                    for skill in enhanced_skills:
+                        if skill["name"].lower() not in skill_names:
+                            candidate_skills.append({
+                                'skill': skill['name'],
+                                'type': skill.get('type', 'TECH'),
+                                'context': '',
+                                'importance': skill.get('importance', 0.5),
+                                'experience_years': skill.get('experience_years', 0)
+                            })
+                            skill_names.add(skill["name"].lower())
+                except Exception as e:
+                    logging.error(f"外部スキルサービスの使用中にエラーが発生しました: {str(e)}")
+        
+        # スキルをカテゴリ別に分類
+        categorized_skills = self.categorize_skills(candidate_skills)
+        
+        return categorized_skills
+        
     def _extract_experience(self, context: str, skill: str) -> Optional[float]:
         """スキルに関連する経験年数を抽出"""
         # パターン1: 「X年(間)」
@@ -334,79 +486,59 @@ class SkillExtractor:
         
         # 重要度でソート
         for category in categories:
-            categories[category].sort(key=lambda x: x['importance'], reverse=True)
+            categories[category].sort(key=lambda x: x.get('importance', 0), reverse=True)
             
-        # 空のカテゴリを削除
-        return {k: v for k, v in categories.items() if v}
-    
-    def extract_skills(self, text: str) -> Dict[str, List[Dict]]:
-        """
-        テキストからスキルを抽出するメイン関数
+        return categories
         
-        Args:
-            text: 解析対象のテキスト
+    def _find_skill_sections(self, text: str) -> List[Dict]:
+        """スキルが記載されているセクションを特定する"""
+        sections = []
             
-        Returns:
-            カテゴリ別に分類されたスキルの辞書
-        """
-        print("スキル抽出を開始します...")
-        if not text:
-            print("エラー: テキストが空です")
-            return {}
+        # スキルが記載されていそうな見出しを検索
+        skill_headers = [
+            r'スキル',
+            r'技術スタック',
+            r'開発経験',
+            r'技術スキル',
+            r'得意技術',
+            r'経験技術',
+            r'使用技術',
+            r'開発環境',
+            r'プログラミング言語',
+            r'フレームワーク',
+            r'ツール',
+            r'インフラ',
+            r'データベース'
+        ]
+        
+        # テキストを行に分割
+        lines = text.split('\n')
+        current_section = None
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+                
+            # 見出しかどうかをチェック
+            is_header = any(header in line for header in skill_headers)
             
-        try:
-            # テキストの前処理
-            print("テキストの前処理を開始します...")
-            text = self.preprocess_text(text)
-            print(f"前処理後のテキスト長: {len(text)}文字")
+            if is_header:
+                if current_section:
+                    sections.append(current_section)
+                current_section = {
+                    'title': line,
+                    'content': [],
+                    'line_number': i + 1
+                }
+            elif current_section is not None:
+                current_section['content'].append(line)
+        
+        # 最後のセクションを追加
+        if current_section:
+            sections.append(current_section)
             
-            # スキル候補を抽出
-            print("スキル候補を抽出しています...")
-            candidate_skills = self.extract_candidate_skills(text)
-            print(f"抽出されたスキル候補: {len(candidate_skills)}件")
-            
-            if not candidate_skills:
-                print("警告: スキル候補が1つも見つかりませんでした")
-                return {}
-            
-            # スキルを正規化して重複を削除
-            print("スキルの正規化を実行中...")
-            unique_skills = {}
-            for skill_info in candidate_skills:
-                normalized = self.normalize_skill(skill_info['skill'])
-                if normalized:
-                    if normalized not in unique_skills:
-                        unique_skills[normalized] = skill_info
-                        print(f"追加されたスキル: {normalized}")
-                else:
-                    print(f"スキルの正規化に失敗: {skill_info['skill']}")
-            
-            if not unique_skills:
-                print("エラー: 有効なスキルが見つかりませんでした")
-                return {}
-            
-            # スキルをカテゴリ別に分類
-            print("スキルをカテゴリ別に分類中...")
-            skills_list = list(unique_skills.values())
-            categorized_skills = self.categorize_skills(skills_list)
-            
-            if not categorized_skills:
-                print("警告: カテゴリ別に分類されたスキルがありません")
-            else:
-                for category, skills in categorized_skills.items():
-                    print(f"カテゴリ '{category}': {len(skills)}スキル")
-            
-            return categorized_skills
-            
-        except Exception as e:
-            print(f"スキル抽出中にエラーが発生しました: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return {}
-            
-        except Exception as e:
-            print(f"スキル抽出中にエラーが発生しました: {str(e)}")
-            return {cat: [] for cat in SKILL_CATEGORIES.values()}
+        return sections
     
     def format_skills_output(self, categorized_skills: Dict[str, List[Dict]]) -> Dict[str, List[Dict]]:
         """スキルを表示用にフォーマット"""

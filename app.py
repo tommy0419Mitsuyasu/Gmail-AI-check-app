@@ -6,10 +6,18 @@ from pathlib import Path
 import PyPDF2
 from datetime import datetime, timedelta
 from collections import defaultdict
+from dotenv import load_dotenv  # 環境変数の読み込み用
 from skill_extractor import SkillExtractor
+
+# スキル抽出器を初期化（外部スキルAPIを有効にするかどうかを環境変数から読み込む）
+skill_extractor = SkillExtractor(enable_external_skills=os.getenv('ENABLE_EXTERNAL_SKILL_API', 'false').lower() == 'true')
+
 from skill_matcher import SkillMatcher  # SkillMatcher クラスをインポート
 import skill_matcher
 from skill_matcher_enhanced import enhance_skill_matching  # 新しいマッチング機能をインポート
+
+# 環境変数の読み込み
+load_dotenv()
 
 # 開発環境用の設定（本番環境では削除またはコメントアウト）
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
