@@ -3,13 +3,52 @@
 - コンテキストを考慮したスキル抽出
 - 経験年数の自動検出
 - スキルの重要度スコアリング
+- エンジニアタイプ分析
 """
-import re
-import os
-from typing import Dict, List, Set, Optional, Any, Tuple
-from collections import defaultdict
-import math
 import logging
+import re
+from collections import defaultdict
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+import unicodedata
+
+# エンジニアタイプの定義
+ENGINEER_TYPES = {
+    'フロントエンド': {
+        'skills': ['HTML', 'CSS', 'JavaScript', 'TypeScript', 'React', 'Vue.js', 'Angular', 'Svelte', 'jQuery', 'Next.js', 'Nuxt.js', 'Webpack', 'Babel'],
+        'weight': 1.0,
+        'description': 'ユーザーインターフェースの開発を専門とするエンジニア。Webアプリケーションの見た目や操作性を担当。'
+    },
+    'バックエンド': {
+        'skills': ['Python', 'Java', 'C#', 'Node.js', 'Django', 'Flask', 'FastAPI', 'Spring', 'Laravel', 'Ruby on Rails', 'Express', 'Go', 'Rust', 'PHP'],
+        'weight': 1.0,
+        'description': 'サーバーサイドのロジックやデータベース連携を担当するエンジニア。'
+    },
+    'インフラ/DevOps': {
+        'skills': ['Docker', 'Kubernetes', 'AWS', 'Azure', 'GCP', 'CI/CD', 'Git', 'Terraform', 'Ansible', 'Jenkins', 'GitHub Actions', 'Linux', 'Nginx', 'Apache'],
+        'weight': 1.2,
+        'description': 'インフラ構築や運用自動化を専門とするエンジニア。クラウド環境の構築・運用も担当。'
+    },
+    'データサイエンティスト/MLエンジニア': {
+        'skills': ['Python', 'R', 'SQL', 'pandas', 'numpy', 'scikit-learn', 'TensorFlow', 'PyTorch', 'Data Analysis', 'Machine Learning', 'Deep Learning', 'Keras', 'Jupyter', 'Tableau'],
+        'weight': 1.1,
+        'description': 'データ分析や機械学習モデルの開発・運用を専門とするエンジニア。'
+    },
+    'モバイル': {
+        'skills': ['Swift', 'Kotlin', 'Flutter', 'React Native', 'iOS', 'Android', 'Xamarin', 'SwiftUI', 'Jetpack Compose'],
+        'weight': 1.0,
+        'description': 'スマートフォン向けアプリケーションの開発を専門とするエンジニア。'
+    },
+    'フルスタック': {
+        'skills': ['JavaScript', 'TypeScript', 'Node.js', 'React', 'Vue.js', 'Python', 'Django', 'Flask', 'SQL', 'Docker', 'AWS'],
+        'weight': 0.9,
+        'description': 'フロントエンドからバックエンドまで幅広く対応できるエンジニア。'
+    },
+    'QA/テストエンジニア': {
+        'skills': ['Selenium', 'Jest', 'pytest', 'JUnit', 'TestNG', 'Cypress', 'Playwright', 'Appium', 'JMeter'],
+        'weight': 1.0,
+        'description': 'ソフトウェアの品質保証やテストを専門とするエンジニア。'
+    }
+}
 
 # Rezume Parser をインポート
 try:
@@ -164,12 +203,65 @@ class SkillExtractor:
         self.skill_index = defaultdict(list)
         for skill, data in self.skill_db.items():
             # スキル名でインデックス
-            for word in skill.lower().split():
-                self.skill_index[word].append((skill, data))
-            # エイリアスでもインデックス
+            self.skill_index[skill.lower()].append((skill, 1.0))  # 完全一致は重み1.0
+            
+            # エイリアスでインデックス
             for alias in data.get('aliases', []):
-                for word in alias.lower().split():
-                    self.skill_index[word].append((skill, data))
+                self.skill_index[alias.lower()].append((skill, 0.9))  # エイリアスは重み0.9
+                
+    def analyze_engineer_type(self, skills: List[Dict[str, Any]]) -> Dict[str, float]:
+        """
+        抽出されたスキルからエンジニアのタイプを分析
+        
+        Args:
+            skills: 抽出されたスキルのリスト
+            
+        Returns:
+            エンジニアタイプとスコアの辞書（スコアの降順でソート済み）
+        """
+        if not skills:
+            return {}
+            
+        # スキル名のセットを作成（高速化のため）
+        skill_set = {s['skill'].lower() for s in skills if isinstance(s, dict) and 'skill' in s}
+        
+        type_scores = {}
+        
+        for type_name, type_info in ENGINEER_TYPES.items():
+            score = 0.0
+            matched_skills = []
+            
+            # 各タイプに紐づくスキルとマッチング
+            for skill in type_info['skills']:
+                if skill.lower() in skill_set:
+                    # 必須スキルの場合はスコアを高く
+                    skill_data = next((s for s in skills 
+                                    if isinstance(s, dict) 
+                                    and s.get('skill', '').lower() == skill.lower()), {})
+                    
+                    skill_score = 1.5 if skill_data.get('is_required', False) else 1.0
+                    matched_skills.append((skill, skill_score))
+            
+            # スコア計算（マッチしたスキル数 × 重み）
+            if matched_skills:
+                base_score = sum(score for _, score in matched_skills)
+                type_scores[type_name] = {
+                    'score': round(base_score * type_info['weight'], 2),
+                    'description': type_info['description'],
+                    'matched_skills': [s[0] for s in matched_skills]
+                }
+                
+                # デバッグ用ログ
+                logging.debug(f"タイプ '{type_name}' にマッチしたスキル: {', '.join([s[0] for s in matched_skills])} (スコア: {type_scores[type_name]['score']:.2f})")
+        
+        # スコアが0より大きいものだけをフィルタリングし、スコアの降順でソート
+        sorted_types = dict(sorted(
+            {k: v for k, v in type_scores.items() if v['score'] > 0}.items(),
+            key=lambda x: x[1]['score'],
+            reverse=True
+        ))
+        
+        return sorted_types
     
     def preprocess_text(self, text: str) -> str:
         """テキストの前処理"""
@@ -595,30 +687,112 @@ class SkillExtractor:
         
         return None
     
-    def categorize_skills(self, skills: List[Dict]) -> Dict[str, List[Dict]]:
-        """スキルをカテゴリ別に分類"""
-        categories = {cat: [] for cat in SKILL_CATEGORIES.values()}
+    def categorize_skills(self, skills: Union[List[Dict], List[str], Dict[str, List]]) -> Dict[str, List[Dict]]:
+        """スキルをカテゴリ別に分類
         
-        # Noneチェックを追加
+        Args:
+            skills: スキルのリストまたは辞書。各要素は辞書、文字列、または文字列のリスト
+            
+        Returns:
+            カテゴリ別に分類されたスキルの辞書
+        """
+        categories = {category: [] for category in SKILL_CATEGORIES.values()}
+        categories['その他'] = []
+        
+        # スキルがNoneまたは空の場合は空のカテゴリを返す
         if not skills:
             return categories
             
+        # 既にカテゴリ分けされた辞書が渡された場合はそのまま返す
+        if isinstance(skills, dict):
+            return skills
+            
+        processed_skills = set()  # 重複を防ぐためのセット（小文字で比較）
+        
         for skill_data in skills:
-            if not isinstance(skill_data, dict):
+            # スキルデータが文字列の場合は辞書に変換
+            if isinstance(skill_data, str):
+                skill_data = {
+                    'skill': skill_data,
+                    'name': skill_data,
+                    'type': 'other',
+                    'confidence': 0.5,
+                    'importance': 0.5,
+                    'source': 'unknown'
+                }
+            # 辞書でない場合はスキップ
+            elif not isinstance(skill_data, dict):
+                logging.warning(f"無効なスキルデータをスキップ: {skill_data}")
                 continue
                 
-            # 重要度がNoneの場合は0に設定
-            if 'importance' not in skill_data or skill_data['importance'] is None:
-                skill_data['importance'] = 0.0
+            # スキル名を取得
+            skill_name = str(skill_data.get('skill', '') or skill_data.get('name', '')).strip()
+            if not skill_name:
+                logging.warning(f"スキル名が空のエントリをスキップ: {skill_data}")
+                continue
                 
-            skill_type = skill_data.get('type', 'other')
-            category = SKILL_CATEGORIES.get(skill_type, 'その他')
-            categories[category].append(skill_data)
+            # スキル名を正規化して重複をチェック
+            normalized_name = self.normalize_skill(skill_name)
+            if normalized_name in processed_skills:
+                logging.debug(f"重複するスキルをスキップ: {skill_name}")
+                continue
+                
+            # スキルのメタデータを取得
+            skill_type = str(skill_data.get('type', 'other')).lower()
+            
+            # 信頼度と重要度の取得（型チェック付き）
+            try:
+                skill_confidence = float(skill_data.get('confidence', 0.5) or 0.5)
+                skill_importance = float(skill_data.get('importance', 0.5) or 0.5)
+            except (TypeError, ValueError) as e:
+                logging.warning(f"スキルの信頼度/重要度の変換エラー: {e}")
+                skill_confidence = 0.5
+                skill_importance = 0.5
+            
+            # カテゴリを決定
+            category = 'その他'  # デフォルトカテゴリ
+            
+            # スキルDBに基づいてカテゴリを決定
+            skill_info = self.skill_db.get(skill_name.title(), {}) or \
+                       self.skill_db.get(skill_name.upper(), {}) or \
+                       self.skill_db.get(skill_name.lower(), {})
+            
+            if skill_info:
+                skill_type = skill_info.get('type', skill_type)
+                skill_category = skill_info.get('category')
+                if skill_category and skill_category in categories:
+                    category = skill_category
+            
+            # スキルエントリを作成
+            skill_entry = {
+                'skill': skill_name,
+                'name': skill_name,  # 互換性のため両方のキーを設定
+                'type': skill_type,
+                'confidence': skill_confidence,
+                'importance': skill_importance,
+                'source': str(skill_data.get('source', 'unknown'))
+            }
+            
+            # その他の情報があれば追加
+            for key, value in skill_data.items():
+                if key not in ['skill', 'name', 'type', 'confidence', 'importance', 'source'] and value is not None:
+                    skill_entry[key] = value
+            
+            # カテゴリにスキルを追加
+            categories[category].append(skill_entry)
+            processed_skills.add(normalized_name)
+            
+            logging.debug(f"スキルをカテゴリに追加: {skill_name} -> {category}")
         
-        # 重要度でソート（Noneの場合は0として扱う）
+        # 重要度と信頼度でソート
         for category in categories:
             try:
-                categories[category].sort(key=lambda x: float(x.get('importance', 0) or 0), reverse=True)
+                categories[category].sort(
+                    key=lambda x: (
+                        -float(x.get('importance', 0.5) or 0.5),
+                        -float(x.get('confidence', 0.5) or 0.5)
+                    )
+                )
             except (TypeError, ValueError):
                 # ソートに失敗した場合はそのまま
                 pass
@@ -825,18 +999,41 @@ class SkillExtractor:
             try:
                 if isinstance(skills, list):
                     categorized_skills[category] = sorted(
-                        skills, 
-                        key=lambda x: (float(x.get('confidence', 0) or 0), float(x.get('importance', 0) or 0)), 
+                        skills,
+                        key=lambda x: (float(x.get('confidence', 0) or 0), float(x.get('importance', 0) or 0)),
                         reverse=True
                     )
             except Exception as e:
                 logging.error(f"スキルのソート中にエラーが発生しました: {str(e)}")
         
+        # エンジニアタイプを分析
+        engineer_types = self.analyze_engineer_type(candidate_skills)
+        
+        # エンジニアタイプをスキルとして追加
+        if engineer_types:
+            # スコアが0.3以上のエンジニアタイプを追加
+            for eng_type, data in engineer_types.items():
+                if data.get('score', 0) >= 0.3:
+                    categorized_skills.setdefault('engineer_types', []).append({
+                        'skill': eng_type,
+                        'name': eng_type,
+                        'type': 'engineer_type',
+                        'confidence': float(data.get('score', 0.5)),
+                        'importance': 0.7,  # エンジニアタイプは重要度を高めに設定
+                        'source': 'skill_analyzer',
+                        'categories': ['エンジニアタイプ']
+                    })
+            
+            # 主要なエンジニアタイプをログに記録
+            primary_type = next(iter(engineer_types), None)
+            if primary_type:
+                logging.info(f"主なエンジニアタイプ: {primary_type} (スコア: {engineer_types[primary_type]['score']:.2f})")
+        
         return categorized_skills
     
-    def format_skills_output(self, categorized_skills: Dict[str, List[Dict]]) -> Dict[str, List[Dict]]:
+    def format_skills_output(self, categorized_skills: Dict[str, Any]) -> Dict[str, List[Dict]]:
         """スキルを表示用にフォーマット
-{{ ... }}
+        
         Args:
             categorized_skills: カテゴリ別に分類されたスキルの辞書
             
@@ -845,36 +1042,84 @@ class SkillExtractor:
         """
         formatted = {}
         
+        # categorized_skills が None または辞書でない場合は空の辞書を返す
+        if not isinstance(categorized_skills, dict):
+            return {}
+        
         for category, skills in categorized_skills.items():
-            if skills:
-                # 信頼度と重要度の高い順にソート
-                sorted_skills = sorted(
-                    skills,
+            # スキルが文字列の場合は、それをスキル名とする辞書のリストに変換
+            if isinstance(skills, str):
+                skills = [{'skill': skills}]
+            # スキルがリストでない場合は空のリストを使用
+            elif not isinstance(skills, list):
+                skills = []
+                
+            formatted_skills = []
+            
+            for skill in skills:
+                # スキルが文字列の場合は辞書に変換
+                if isinstance(skill, str):
+                    skill = {
+                        'skill': skill,
+                        'type': 'other',
+                        'confidence': 0.5,
+                        'source': 'unknown'
+                    }
+                # スキルが辞書でない場合はスキップ
+                elif not isinstance(skill, dict):
+                    continue
+                    
+                # スキル名を取得
+                skill_name = skill.get('skill') or skill.get('name') or str(skill)
+                if not skill_name:
+                    continue
+                    
+                # 信頼度が低いスキルはスキップ
+                try:
+                    confidence = float(skill.get('confidence', 0) or 0)
+                    if confidence < 0.3:
+                        continue
+                except (TypeError, ValueError):
+                    confidence = 0.5
+                
+                # 重要度の取得
+                try:
+                    importance = float(skill.get('importance', 0.5) or 0.5)
+                except (TypeError, ValueError):
+                    importance = 0.5
+                
+                # スキル情報を整形
+                formatted_skill = {
+                    'name': skill_name,
+                    'type': str(skill.get('type', 'other')).lower(),
+                    'confidence': confidence,
+                    'importance': importance,
+                    'experience': skill.get('experience_years'),
+                    'context': str(skill.get('context', '')),
+                    'categories': skill.get('categories', []),
+                    'related_skills': skill.get('related_skills', []),
+                    'source': str(skill.get('source', 'unknown'))
+                }
+                
+                # 型チェックと変換
+                if not isinstance(formatted_skill['categories'], list):
+                    formatted_skill['categories'] = []
+                if not isinstance(formatted_skill['related_skills'], list):
+                    formatted_skill['related_skills'] = []
+                    
+                formatted_skills.append(formatted_skill)
+            
+            # 信頼度と重要度でソート
+            try:
+                formatted_skills.sort(
                     key=lambda x: (x.get('confidence', 0), x.get('importance', 0)),
                     reverse=True
                 )
-                
-                # 必要な情報のみを抽出
-                formatted_skills = []
-                for skill in sorted_skills:
-                    # 信頼度が低いスキルはスキップ（オプション）
-                    if skill.get('confidence', 0) < 0.3:
-                        continue
-                        
-                    formatted_skill = {
-                        'name': skill['skill'],
-                        'importance': skill.get('importance', 0.5),
-                        'confidence': skill.get('confidence', 0.5),
-                        'experience': skill.get('experience_years'),
-                        'context': skill.get('context', ''),
-                        'categories': skill.get('categories', []),
-                        'related_skills': skill.get('related_skills', []),
-                        'source': skill.get('source', 'basic_extractor')
-                    }
-                    formatted_skills.append(formatted_skill)
-                
-                if formatted_skills:  # スキルが1つ以上ある場合のみ追加
-                    formatted[category] = formatted_skills
+            except (TypeError, KeyError) as e:
+                logging.warning(f"スキルのソート中にエラーが発生しました: {str(e)}")
+            
+            if formatted_skills:
+                formatted[category] = formatted_skills
         
         return formatted
 

@@ -1,15 +1,10 @@
 import re
-import nltk
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
+import string
 
-# NLTKのデータをダウンロード
-try:
-    nltk.data.find('tokenizers/punkt')
-    nltk.data.find('taggers/averaged_perceptron_tagger')
-except LookupError:
-    nltk.download('punkt')
-    nltk.download('averaged_perceptron_tagger')
+# NLTKを使用しないモードで固定
+NLTK_AVAILABLE = False
 
 class RezumeParser:
     def __init__(self):
@@ -86,83 +81,88 @@ class RezumeParser:
         """
         return self._extract_skills(text)
         
-    def _extract_skills(self, text: str) -> List[Dict]:
-        """スキルを抽出（プライベートメソッド）
-        
-        Args:
-            text: スキルを抽出するテキスト
-            
-        Returns:
-            抽出されたスキルのリスト
-        """
-        if not text or not isinstance(text, str):
-            return []
-            
+    def _extract_skills(self, text: str) -> List[Dict[str, Any]]:
+        """テキストからスキルを抽出するプライベートメソッド"""
         skills = []
+        
+        if not text or not isinstance(text, str):
+            return skills
+            
+        # テキストを小文字に変換
         text_lower = text.lower()
+        
+        # NLTKを使用しないシンプルなトークン化
+        # 1. 英数字とハイフン、プラス記号、日本語を保持して、その他をスペースに変換
+        cleaned_text = re.sub(r'[^\w\s\-+\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]', ' ', text)
+        # 2. 連続するスペースを1つに変換
+        cleaned_text = re.sub(r'\s+', ' ', cleaned_text)
+        # 3. トークンに分割
+        tokens = [t for t in cleaned_text.split() if len(t) > 1]  # 1文字のトークンは除外
         
         # 1. 既知の技術用語を抽出（大文字小文字を区別せず）
         for skill_lower, skill_info in self.skill_aliases.items():
             # 単語境界を考慮した検索
-            pattern = r'(?<!\w)' + re.escape(skill_lower) + r'(?!\w)'
-            for match in re.finditer(pattern, text_lower):
-                start, end = match.span()
-                skill_name = skill_info['name']  # 正規化されたスキル名
-                
-                # 重複を避ける
-                if not any(s['name'].lower() == skill_name.lower() and 
-                          s['start'] <= start and s['end'] >= end 
-                          for s in skills):
+            if re.search(r'\b' + re.escape(skill_lower) + r'\b', text_lower):
+                # スキルが既に追加されていないか確認
+                if not any(s['name'].lower() == skill_info['name'].lower() for s in skills):
                     skills.append({
-                        'name': skill_name,
+                        'name': skill_info['name'],
                         'type': skill_info['type'],
-                        'start': start,
-                        'end': end
+                        'start': 0,
+                        'end': 0,
+                        'importance': 0.8,  # デフォルトの重要度
+                        'confidence': 0.9,   # 既知のスキルは信頼度を高く
+                        'context': 'known_skill',
+                        'source': 'skill_aliases',
+                        'category': skill_info.get('category', 'other')
                     })
         
-        # 2. 固有名詞と大文字で始まる単語を抽出
-        try:
-            tokens = nltk.word_tokenize(text)
-            tagged = nltk.pos_tag(tokens)
-            
-            # 固有名詞と大文字で始まる単語を抽出
-            proper_nouns = []
-            current_phrase = []
-            
-            for word, pos in tagged:
-                if pos in ['NNP', 'NNPS'] or (word[0].isupper() and len(word) > 1):
-                    current_phrase.append(word)
-                else:
-                    if current_phrase:
-                        proper_nouns.append(' '.join(current_phrase))
-                        current_phrase = []
-            
-            # 最後のフレーズを追加
-            if current_phrase:
-                proper_nouns.append(' '.join(current_phrase))
-            
-            # 既存のスキルと重複していないものを追加
-            existing_skills = {s['name'].lower() for s in skills}
-            for word in proper_nouns:
-                word_lower = word.lower()
-                if (len(word) > 2 and 
-                    word_lower not in existing_skills and 
-                    not word_lower.isdigit() and
-                    not any(word_lower in s.lower() for s in existing_skills)):
-                    
+        # 2. 大文字で始まる単語を抽出（固有名詞の代わり）
+        for token in tokens:
+            if token[0].isupper() and len(token) > 1:
+                # スキルが既に追加されていないか確認
+                if not any(s['name'].lower() == token.lower() for s in skills):
                     # テキスト内での位置を検索
-                    for match in re.finditer(re.escape(word), text, re.IGNORECASE):
+                    for match in re.finditer(re.escape(token), text):
                         skills.append({
-                            'name': word,
+                            'name': token,
                             'type': 'OTHER',
                             'start': match.start(),
                             'end': match.end()
                         })
                         break
-                        
-        except Exception as e:
-            import traceback
-            logging.warning(f"スキル抽出中にエラーが発生しました: {str(e)}\n{traceback.format_exc()}")
+        
+        # 3. 単語の組み合わせをチェック（2-3語のフレーズ）
+        for i in range(len(tokens) - 1):
+            # 2語のフレーズ
+            phrase = ' '.join(tokens[i:i+2])
+            if len(phrase) > 3 and not any(s['name'].lower() == phrase.lower() for s in skills):
+                for match in re.finditer(re.escape(phrase), text, re.IGNORECASE):
+                    skills.append({
+                        'name': phrase,
+                        'type': 'other',
+                        'start': match.start(),
+                        'end': match.end(),
+                        'importance': 0.5,  # デフォルトの重要度
+                        'confidence': 0.6,   # 抽出されたスキルはやや低めの信頼度
+                        'context': 'extracted',
+                        'source': 'text_analysis',
+                        'category': 'other'
+                    })
+                    break
+            
+            # 3語のフレーズ（オプション）
+            if i < len(tokens) - 2:
+                phrase = ' '.join(tokens[i:i+3])
+                if len(phrase) > 5 and not any(s['name'].lower() == phrase.lower() for s in skills):
+                    for match in re.finditer(re.escape(phrase), text, re.IGNORECASE):
+                        skills.append({
+                            'name': phrase,
+                            'type': 'PHRASE',
+                            'start': match.start(),
+                            'end': match.end()
+                        })
+                        break
         
         # 3. 重複を削除して返す
         unique_skills = []

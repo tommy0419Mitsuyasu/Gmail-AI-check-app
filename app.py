@@ -406,22 +406,39 @@ def analyze_resume(text: str) -> Dict[str, Any]:
         # スキル抽出
         skills = extract_skills(text)
         
-        # サマリー情報を生成
-        total_skills = sum(len(skills[cat]) for cat in skills)
-        category_count = len(skills)
+        # スキルが空の場合はエラーを返す
+        if not skills:
+            return {
+                "status": "error",
+                "error": "スキルを抽出できませんでした。別のファイルをお試しください。"
+            }
         
-        # トップスキルを抽出（重要度順に最大5つ）
+        # サマリー情報を生成
+        total_skills = 0
         all_skills = []
+        
+        # 各カテゴリのスキルを処理
         for category, skill_list in skills.items():
+            if not isinstance(skill_list, list):
+                continue
+                
+            total_skills += len(skill_list)
+            
             for skill in skill_list:
+                if not isinstance(skill, dict):
+                    continue
+                    
                 all_skills.append({
-                    'name': skill['name'],
-                    'importance': skill.get('importance', 0),
+                    'name': skill.get('name', '不明なスキル'),
+                    'importance': float(skill.get('importance', 0.5)),
                     'category': category
                 })
         
-        # 重要度でソート
+        # 重要度でソートしてトップ5を取得
         top_skills = sorted(all_skills, key=lambda x: x['importance'], reverse=True)[:5]
+        
+        # カテゴリ数を計算（空でないカテゴリのみ）
+        category_count = sum(1 for cat in skills if isinstance(skills[cat], list) and skills[cat])
         
         return {
             "skills": skills,
@@ -467,7 +484,7 @@ def extract_skills(text: str) -> Dict[str, List[Dict]]:
         }
     """
     print("\n=== スキル抽出を開始します ===")
-    print(f"入力テキスト長: {len(text)}文字")
+    print(f"入力テキスト長: {len(text)}文字" if text else "警告: テキストが空です")
     
     if not text:
         print("エラー: テキストが空です")
@@ -486,37 +503,84 @@ def extract_skills(text: str) -> Dict[str, List[Dict]]:
             print("警告: 抽出されたスキルがありません")
             return {}
             
-        print(f"抽出されたスキルカテゴリ数: {len(skills)}")
+        print(f"抽出されたスキルカテゴリ数: {len(skills) if isinstance(skills, dict) else 0}")
         
         # 結果をフォーマット
         print("スキル情報をフォーマット中...")
         formatted_skills = {}
+        
+        # skillsが辞書でない場合は空の辞書に変換
+        if not isinstance(skills, dict):
+            skills = {}
+            
         for category, skill_list in skills.items():
+            # スキルリストがリストでない場合はスキップ
+            if not isinstance(skill_list, list):
+                print(f"警告: カテゴリ '{category}' のスキルリストが不正な形式です")
+                continue
+                
             print(f"カテゴリ '{category}': {len(skill_list)}スキル")
             formatted_skills[category] = []
             
             for skill in skill_list:
                 try:
+                    # スキルが辞書でない場合はスキップ
+                    if not isinstance(skill, dict):
+                        print(f"警告: スキルが辞書形式ではありません: {skill}")
+                        continue
+                        
+                    # スキル名を取得（'name' または 'skill' キーから）
+                    skill_name = skill.get('name') or skill.get('skill')
+                    if not skill_name:
+                        print("警告: スキル名が空です")
+                        continue
+                        
+                    # 重要度を取得（デフォルトは0.5）
+                    try:
+                        importance = float(skill.get('importance', 0.5))
+                    except (TypeError, ValueError):
+                        importance = 0.5
+                        
+                    # 経験年数を取得
+                    experience = skill.get('experience') or skill.get('experience_years')
+                    
+                    # コンテキストを取得
+                    context = str(skill.get('context', '')) if skill.get('context') else ''
+                    
+                    # カテゴリを取得（リストでない場合はリストに変換）
+                    categories = skill.get('categories', [])
+                    if not isinstance(categories, list):
+                        categories = [str(categories)] if categories else []
+                        
+                    # 関連スキルを取得（リストでない場合はリストに変換）
+                    related_skills = skill.get('related_skills', [])
+                    if not isinstance(related_skills, list):
+                        related_skills = [str(related_skills)] if related_skills else []
+                    
+                    # フォーマット済みスキルを作成
                     formatted_skill = {
-                        'name': skill.get('name', skill.get('skill', '不明なスキル')),  # 両方のキーを確認
-                        'importance': float(skill.get('importance', 0.5)),
-                        'experience': skill.get('experience', skill.get('experience_years')),  # 両方のキーを確認
-                        'context': skill.get('context', ''),
-                        'categories': skill.get('categories', []),
-                        'related_skills': skill.get('related_skills', [])
+                        'name': str(skill_name),
+                        'importance': importance,
+                        'experience': experience,
+                        'context': context,
+                        'categories': categories,
+                        'related_skills': related_skills
                     }
+                    
                     formatted_skills[category].append(formatted_skill)
-                    print(f"  - スキル: {formatted_skill['name']}, 重要度: {formatted_skill['importance']}")
+                    print(f"  - スキル: {formatted_skill['name']}, 重要度: {formatted_skill['importance']:.2f}")
+                    
                 except Exception as e:
                     print(f"スキルのフォーマット中にエラーが発生しました: {str(e)}")
                     print(f"問題のスキルデータ: {skill}")
         
         # 結果のサマリーを表示
-        total_skills = sum(len(skills) for skills in formatted_skills.values())
+        total_skills = sum(len(skill_list) for skill_list in formatted_skills.values() if isinstance(skill_list, list))
         print(f"\n=== スキル抽出完了 ===")
         print(f"合計スキル数: {total_skills}")
-        for category, skills in formatted_skills.items():
-            print(f"{category}: {len(skills)}スキル")
+        for category, skill_list in formatted_skills.items():
+            if isinstance(skill_list, list):
+                print(f"{category}: {len(skill_list)}スキル")
         
         return formatted_skills
         
