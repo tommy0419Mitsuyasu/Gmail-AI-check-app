@@ -1,5 +1,6 @@
 import re
 import nltk
+import logging
 from typing import Dict, List, Optional
 
 # NLTKのデータをダウンロード
@@ -70,8 +71,8 @@ class RezumeParser:
             'raw_text': text[:500] + '...'  # デバッグ用に最初の500文字を保存
         }
     
-    def _extract_skills(self, text: str) -> List[Dict]:
-        """スキルを抽出
+    def extract_skills(self, text: str) -> List[Dict]:
+        """スキルを抽出（パブリックメソッド）
         
         Args:
             text: スキルを抽出するテキスト
@@ -82,6 +83,17 @@ class RezumeParser:
             - type: スキルのタイプ（例: PROGRAMMING, WEB, DATABASE など）
             - start: テキスト内での開始位置
             - end: テキスト内での終了位置
+        """
+        return self._extract_skills(text)
+        
+    def _extract_skills(self, text: str) -> List[Dict]:
+        """スキルを抽出（プライベートメソッド）
+        
+        Args:
+            text: スキルを抽出するテキスト
+            
+        Returns:
+            抽出されたスキルのリスト
         """
         if not text or not isinstance(text, str):
             return []
