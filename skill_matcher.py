@@ -155,6 +155,158 @@ class SkillMatcher:
             
         return weight
 
+    def extract_requirements(self, text: str) -> Dict[str, List[Dict]]:
+        """メール本文から必須スキルと尚可スキルを抽出する"""
+        if not text:
+            return {'required_skills': [], 'preferred_skills': []}
+        
+        # 必須スキルセクションを抽出
+        required_section = self._extract_section(text, ['必須スキル', '必須要件', '必須事項', '必須技術'])
+        required_skills = self._extract_skills_from_section(required_section) if required_section else []
+        
+        # 尚可スキルセクションを抽出
+        preferred_section = self._extract_section(text, ['尚可スキル', '歓迎スキル', 'あれば尚可', '尚可要件'])
+        preferred_skills = self._extract_skills_from_section(preferred_section) if preferred_section else []
+        
+        return {
+            'required_skills': required_skills,
+            'preferred_skills': preferred_skills
+        }
+
+    def _extract_section(self, text: str, section_names: List[str]) -> Optional[str]:
+        """テキストから指定されたセクション名のいずれかにマッチするセクションを抽出する"""
+        for name in section_names:
+            pattern = re.compile(
+                r'{}\s*[:：]?\s*\n(.*?)(?=\n\S+[:：]|$)'.format(re.escape(name)),
+                re.DOTALL | re.IGNORECASE
+            )
+            match = pattern.search(text)
+            if match:
+                return match.group(1).strip()
+        return None
+
+    def _extract_skills_from_section(self, section_text: str) -> List[Dict]:
+        """スキルセクションからスキルと経験年数を抽出する"""
+        skills = []
+        if not section_text:
+            return skills
+        
+        # 箇条書きやカンマ区切りのスキルを抽出
+        lines = [line.strip() for line in section_text.split('\n') if line.strip()]
+        
+        for line in lines:
+            # 行からスキル名と経験年数を抽出
+            skill_match = re.search(r'([^（(]+)(?:（(\d+)[ヶ年]）|(\(\d+)[\s]*(?:years?|年|ヶ月))?', line)
+            if skill_match:
+                skill_name = skill_match.group(1).strip()
+                exp_years = skill_match.group(2) or skill_match.group(3)
+                
+                # スキル名を正規化
+                normalized_skill = self.normalize_skill(skill_name)
+                if normalized_skill:
+                    skills.append({
+                        'skill': normalized_skill,
+                        'experience': float(exp_years) if exp_years and exp_years.isdigit() else None
+                    })
+        
+        return skills
+
+    def match_skills_with_requirements(self, candidate_skills: List[Dict], job_requirements: Dict) -> Dict:
+        """
+        候補者のスキルと求人要件をマッチングする
+        """
+        # 候補者のスキルを正規化してセットに変換
+        candidate_skill_set = {self.normalize_skill(skill['name'].lower()): skill 
+                             for skill in candidate_skills if 'name' in skill}
+        
+        results = {
+            'match_score': 0.0,
+            'required_matches': [],
+            'preferred_matches': [],
+            'missing_required': [],
+            'missing_preferred': []
+        }
+        
+        # 必須スキルのマッチング
+        required_matches = self._match_skill_list(
+            job_requirements.get('required_skills', []),
+            candidate_skill_set
+        )
+        results['required_matches'] = required_matches['matches']
+        results['missing_required'] = required_matches['missing']
+        
+        # 尚可スキルのマッチング
+        preferred_matches = self._match_skill_list(
+            job_requirements.get('preferred_skills', []),
+            candidate_skill_set
+        )
+        results['preferred_matches'] = preferred_matches['matches']
+        results['missing_preferred'] = preferred_matches['missing']
+        
+        # マッチングスコアを計算（必須スキルを重視）
+        total_required = len(job_requirements.get('required_skills', []))
+        matched_required = len([m for m in results['required_matches'] if m['match']])
+        required_score = matched_required / total_required if total_required > 0 else 1.0
+        
+        total_preferred = len(job_requirements.get('preferred_skills', []))
+        matched_preferred = len([m for m in results['preferred_matches'] if m['match']])
+        preferred_score = matched_preferred / total_preferred if total_preferred > 0 else 1.0
+        
+        # 必須スキルを70%、尚可スキルを30%で重み付け
+        results['match_score'] = (required_score * 0.7) + (preferred_score * 0.3)
+        
+        return results
+
+    def _match_skill_list(self, required_skills: List[Dict], candidate_skill_set: Dict) -> Dict:
+        """必要なスキルリストと候補者のスキルをマッチングする"""
+        matches = []
+        missing = []
+        
+        for req_skill in required_skills:
+            req_skill_name = req_skill.get('skill', '').lower()
+            req_exp = req_skill.get('experience')
+            
+            # スキル名を正規化
+            normalized_req_skill = self.normalize_skill(req_skill_name)
+            if not normalized_req_skill:
+                continue
+                
+            # 候補者のスキルとマッチング
+            matched = False
+            match_info = {
+                'skill': normalized_req_skill,
+                'required_exp': req_exp,
+                'match': False,
+                'candidate_exp': None,
+                'experience_met': False
+            }
+            
+            # 完全一致または部分一致でマッチング
+            for cand_skill_name, cand_skill in candidate_skill_set.items():
+                if (normalized_req_skill in cand_skill_name or 
+                    cand_skill_name in normalized_req_skill):
+                    match_info['match'] = True
+                    match_info['candidate_exp'] = cand_skill.get('experience')
+                    
+                    # 経験年数の確認
+                    if req_exp is not None and 'experience' in cand_skill:
+                        match_info['experience_met'] = cand_skill['experience'] >= req_exp
+                    
+                    break
+                    
+            if match_info['match']:
+                matches.append(match_info)
+            else:
+                missing.append({
+                    'skill': normalized_req_skill,
+                    'required_exp': req_exp
+                })
+        
+        return {
+            'matches': matches,
+            'missing': missing
+        }
+
     def match_engineer_to_project(self, engineer_skills: List[Dict[str, any]], project_requirements: List[Dict[str, any]], project_context: str = "") -> Dict[str, any]:
         """エンジニアのスキルとプロジェクト要件をマッチングする"""
         # エンジニアのスキルを正規化

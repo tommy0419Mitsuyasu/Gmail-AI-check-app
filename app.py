@@ -1203,14 +1203,55 @@ def gmail_auth_status():
 @app.route('/api/auth/status')
 def auth_status():
     """認証状態を確認するエンドポイント"""
-    if 'credentials' not in session:
-        return jsonify({'authenticated': False, 'message': 'Not authenticated'})
-    
+    is_authenticated = 'credentials' in session
+    return jsonify({
+        'isAuthenticated': is_authenticated,
+        'hasSkills': 'extracted_skills' in session and bool(session['extracted_skills'])
+    })
+
+@app.route('/api/find_matching_projects', methods=['POST'])
+@login_required
+def find_matching_projects():
+    """スキルにマッチする案件メールを検索するAPI"""
     try:
-        credentials = get_credentials_from_session()
-        if not credentials.valid:
-            return jsonify({'authenticated': False, 'message': 'Token expired'})
-        return jsonify({'authenticated': True, 'message': 'Authenticated'})
+        # セッションから抽出したスキルを取得
+        candidate_skills = session.get('extracted_skills', [])
+        
+        if not candidate_skills:
+            return jsonify({
+                'status': 'error',
+                'error': 'スキルが抽出されていません。先にスキルファイルをアップロードしてください。'
+            }), 400
+        
+        # Gmailサービスを初期化
+        creds = get_gmail_credentials()
+        if not creds or not creds.valid:
+            return jsonify({
+                'status': 'error',
+                'error': 'Gmailの認証が必要です'
+            }), 401
+            
+        service = build('gmail', 'v1', credentials=creds)
+        
+        # 既存のsearch_gmail_emails関数を利用
+        skills = [s['name'] for s in candidate_skills if 'name' in s]
+        normalized_skills = [skill_matcher.normalize_skill(s) for s in skills]
+        
+        # 既存の関数を呼び出し
+        projects = search_gmail_emails(service, skills, normalized_skills)
+        
+        # マッチングスコアでソート（高い順）
+        projects.sort(key=lambda x: x.get('match_score', 0), reverse=True)
+        
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'matching_projects': projects,
+                'total_emails': len(projects),
+                'matched_emails': len(projects)
+            }
+        })
+        
     except Exception as e:
         return jsonify({'authenticated': False, 'message': str(e)})
 

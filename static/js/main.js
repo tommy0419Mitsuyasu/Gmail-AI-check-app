@@ -1590,6 +1590,134 @@ function initializeApp() {
 window.initDragAndDrop = initDragAndDrop;
 window.viewEmail = viewEmail;
 
+// 新しい機能: スキルに基づいてマッチする案件を検索
+function initProjectSearch() {
+    const findProjectsBtn = document.getElementById('find-projects-btn');
+    if (!findProjectsBtn) return;
+
+    findProjectsBtn.addEventListener('click', function() {
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const resultsSummary = document.getElementById('results-summary');
+        const projectsContainer = document.getElementById('projects-container');
+        
+        // ローディング表示
+        loadingIndicator.style.display = 'block';
+        resultsSummary.innerHTML = '';
+        projectsContainer.innerHTML = '';
+        
+        // 既存のsearchMatchingProjects関数が定義されているか確認
+        if (typeof searchMatchingProjects === 'function') {
+            // 既存の関数を使用
+            const skills = JSON.parse(sessionStorage.getItem('extractedSkills') || '[]');
+            searchMatchingProjects(skills);
+        } else {
+            // 新しい実装
+            fetch('/api/find_matching_projects', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                loadingIndicator.style.display = 'none';
+                
+                if (data.status === 'success') {
+                    // 既存のdisplayProjects関数が定義されているか確認
+                    if (typeof displayProjects === 'function') {
+                        displayProjects(data.data.matching_projects);
+                    } else {
+                        // 新しい表示ロジック
+                        displayProjectsNew(data.data.matching_projects);
+                    }
+                    
+                    // サマリーを表示
+                    resultsSummary.innerHTML = `
+                        <div class="alert alert-info">
+                            ${data.data.total_emails}件のメールを検索し、${data.data.matched_emails}件のマッチする案件が見つかりました。
+                        </div>
+                    `;
+                } else {
+                    // エラーを表示
+                    resultsSummary.innerHTML = `
+                        <div class="alert alert-danger">
+                            <strong>エラー:</strong> ${data.error || '不明なエラーが発生しました。'}
+                        </div>
+                    `;
+                }
+            })
+            .catch(error => {
+                loadingIndicator.style.display = 'none';
+                resultsSummary.innerHTML = `
+                    <div class="alert alert-danger">
+                        <strong>エラー:</strong> リクエストの処理中にエラーが発生しました: ${error.message}
+                    </div>
+                `;
+            });
+        }
+    });
+}
+
+// 新しい表示関数
+function displayProjectsNew(projects) {
+    const container = document.getElementById('projects-container');
+    
+    if (!projects || projects.length === 0) {
+        container.innerHTML = '<p>マッチする案件は見つかりませんでした。</p>';
+        return;
+    }
+    
+    let html = '<div class="row">';
+    
+    projects.forEach(project => {
+        const matchPercentage = Math.round(project.match_score * 100);
+        const matchClass = matchPercentage >= 70 ? 'success' : 
+                          matchPercentage >= 40 ? 'warning' : 'danger';
+        
+        html += `
+            <div class="col-md-6 mb-4">
+                <div class="card h-100">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">${project.subject || '（件名なし）'}</h5>
+                        <span class="badge bg-${matchClass}">${matchPercentage}% マッチ</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="card-text"><strong>From:</strong> ${project.from}</p>
+                        <p class="card-text"><strong>Date:</strong> ${project.date}</p>
+                        <p class="card-text">${project.snippet}</p>
+                        
+                        ${project.required_matches && project.required_matches.length > 0 ? `
+                            <h6>必須スキルマッチ:</h6>
+                            <ul class="skill-list">
+                                ${project.required_matches.map(skill => `
+                                    <li class="${skill.match ? 'text-success' : 'text-danger'}">
+                                        ${skill.skill} 
+                                        ${skill.required_exp ? `(${skill.required_exp}年)` : ''}
+                                        ${skill.match ? '✓' : '✗'}
+                                        ${skill.experience_met ? '（経験年数OK）' : skill.experience_met === false ? '（経験年数不足）' : ''}
+                                    </li>
+                                `).join('')}
+                            </ul>
+                        ` : ''}
+                        
+                        <button class="btn btn-primary btn-sm view-detail" data-id="${project.id}">
+                            詳細を表示
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+// ページ読み込み時に初期化
+document.addEventListener('DOMContentLoaded', function() {
+    initProjectSearch();
+});
+
 // ページ読み込み完了後に初期化を実行
 document.addEventListener('DOMContentLoaded', function() {
     initializeApp();
