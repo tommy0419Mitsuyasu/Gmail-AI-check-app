@@ -1,39 +1,11 @@
 import re
 import numpy as np
-import logging
-from typing import List, Dict, Set, Tuple, Optional, Any, DefaultDict
-from dataclasses import dataclass, field
+from typing import List, Dict, Set, Tuple, Optional, Any
+from dataclasses import dataclass
 from collections import defaultdict
-from enum import Enum, auto
-from datetime import datetime
-from pathlib import Path
-
-# 外部ライブラリのインポート（オプション）
-try:
-    from sentence_transformers import SentenceTransformer, util
-    import torch
-    HAS_AI_DEPS = True
-except ImportError:
-    HAS_AI_DEPS = False
-    
-# ロギングの設定
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('skill_matcher.log')
-    ]
-)
-logger = logging.getLogger(__name__)
-
-class SkillContext(Enum):
-    """スキルが現れるコンテキストの種類"""
-    TITLE = auto()        # タイトルや見出し
-    LIST_ITEM = auto()    # リスト形式
-    SENTENCE = auto()     # 通常の文
-    CODE_BLOCK = auto()   # コードブロック内
-    OTHER = auto()        # その他
+from sentence_transformers import SentenceTransformer
+from gensim import corpora, models, similarities
+import logging
 
 # ロギングの設定
 logging.basicConfig(level=logging.INFO)
@@ -41,64 +13,25 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SkillMatch:
-    """スキルマッチ情報を保持するクラス"""
     skill: str
-    matched_terms: List[str] = field(default_factory=list)
-    confidence: float = 0.0
-    category: str = ""
-    context: Dict[str, Any] = field(default_factory=dict)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """辞書形式に変換"""
-        return {
-            'skill': self.skill,
-            'matched_terms': self.matched_terms,
-            'confidence': self.confidence,
-            'category': self.category,
-            'context': self.context
-        }
+    matched_terms: List[str]
+    confidence: float
 
 class SkillMatcher:
-    """スキルを抽出・マッチングするクラス"""
-    
-    def __init__(self, use_ai: bool = False, confidence_threshold: float = 0.5):
-        """
-        SkillMatcherを初期化します。
-        
-        Args:
-            use_ai: AIを使用するかどうか
-            confidence_threshold: 信頼度の閾値（0.0〜1.0）
-        """
-        self.use_ai = use_ai and HAS_AI_DEPS
-        self.confidence_threshold = max(0.0, min(1.0, confidence_threshold))
+    def __init__(self, use_ai: bool = True):
+        self.use_ai = use_ai
         self.ai_model = None
-        self.skill_categories = {}
-        self.skill_aliases = {}
+        self.dictionary = None
+        self.tfidf = None
+        self.index = None
+        self.skill_list = []
         
-        # コンテキストの重み
-        self.context_weights = {
-            SkillContext.TITLE: 1.5,
-            SkillContext.LIST_ITEM: 1.3,
-            SkillContext.SENTENCE: 1.0,
-            SkillContext.CODE_BLOCK: 1.2,
-            SkillContext.OTHER: 0.8
-        }
-        
-        # カテゴリの重み
-        self.category_weights = {
-            'programming_languages': 1.2,
-            'frameworks': 1.3,
-            'cloud': 1.4,
-            'databases': 1.1,
-            'methodologies': 1.0
-        }
-        
-        # 初期化処理
-        self._initialize_skill_categories()
-        
-        # AIモデルの初期化（必要な場合）
+        # AIモデルの初期化
         if self.use_ai:
             self._initialize_ai_model()
+            
+        # スキルカテゴリとそのエイリアスマッピングを初期化
+        self._initialize_skill_categories()
         
     def _initialize_ai_model(self):
         """AIモデルを初期化する"""
@@ -483,179 +416,41 @@ class SkillMatcher:
             'missing': missing
         }
 
-    def match_engineer_to_project(
-        self, 
-        engineer_skills: List[Dict[str, Any]], 
-        project_requirements: List[Dict[str, Any]], 
-        project_context: str = ""
-    ) -> Dict[str, Any]:
-        """
-        エンジニアのスキルとプロジェクト要件をマッチングする
-        
-        Args:
-            engineer_skills: エンジニアのスキルリスト [
-                {'name': str, 'level': str, 'experience_years': float, 'last_used': str(optional)}
-            ]
-            project_requirements: プロジェクトの要件リスト [
-                {
-                    'skill': str, 
-                    'level': str, 
-                    'weight': float,
-                    'required': bool,
-                    'min_experience': float(optional),
-                    'preferred': List[str](optional)
-                }
-            ]
-            project_context: プロジェクトのコンテキスト情報（例: 業界、ドメインなど）
-            
-        Returns:
-            {
-                'match_score': float,  # 0.0〜1.0のマッチスコア
-                'coverage': float,    # カバー率（0.0〜1.0）
-                'matches': [          # マッチしたスキルの詳細
-                    {
-                        'required_skill': str,
-                        'matched_skill': str,
-                        'match_type': str,  # 'exact', 'alias', 'related', 'partial'
-                        'score': float,     # 0.0〜1.0
-                        'level_match': str,  # 'exact', 'higher', 'lower', 'none'
-                        'experience_years': float,
-                        'required_experience': float,
-                        'is_required': bool,
-                        'weight': float
-                    }
-                ],
-                'missing_skills': [    # 不足している必須スキル
-                    {
-                        'skill': str,
-                        'level': str,
-                        'weight': float
-                    }
-                ],
-                'additional_skills': [  # 追加のマッチングスキル
-                    {
-                        'skill': str,
-                        'level': str,
-                        'score': float
-                    }
-                ]
-            }
-        """
-        # エンジニアのスキルを正規化して辞書に格納
+    def match_engineer_to_project(self, engineer_skills: List[Dict[str, Any]], project_requirements: List[Dict[str, Any]], project_context: str = "") -> Dict[str, Any]:
+        """エンジニアのスキルとプロジェクト要件をマッチングする"""
+        # エンジニアのスキルを正規化
         engineer_skill_set = {}
         for skill in engineer_skills:
-            if not skill or not skill.get('name'):
-                continue
-                
-            skill_name = skill.get('name', '').strip()
-            if not skill_name:
-                continue
-                
+            skill_name = skill.get('name', '').lower()
             normalized = self.normalize_skill(skill_name)
-            if not normalized:
-                continue
-                
-            # 最終使用時期を取得（あれば）
-            last_used = skill.get('last_used', '')
-            years_since_used = self._calculate_years_since_used(last_used) if last_used else 0
-            
-            engineer_skill_set[normalized] = {
-                'original_name': skill_name,
-                'level': self._normalize_skill_level(skill.get('level', '')),
-                'experience': max(0, float(skill.get('experience_years', 0) or 0) - (years_since_used * 0.2)),
-                'last_used': last_used,
-                'years_since_used': years_since_used
-            }
+            if normalized not in engineer_skill_set:
+                engineer_skill_set[normalized] = {
+                    'original_name': skill_name,
+                    'level': skill.get('level', '').lower(),
+                    'experience': float(skill.get('experience_years', 0) or 0)
+                }
         
-        # マッチング結果を格納する変数
-        result = {
-            'match_score': 0.0,
-            'coverage': 0.0,
-            'matches': [],
-            'missing_skills': [],
-            'additional_skills': []
-        }
-        
-        # 必須スキルとオプションスキルを分離
-        required_skills = [r for r in project_requirements if r.get('required', True)]
-        optional_skills = [r for r in project_requirements if not r.get('required', False)]
-        
-        # 必須スキルのマッチング
-        required_matches, missing_required = self._match_skill_requirements(
-            required_skills, engineer_skill_set, is_required=True
-        )
-        
-        # オプションスキルのマッチング
-        optional_matches, _ = self._match_skill_requirements(
-            optional_skills, engineer_skill_set, is_required=False
-        )
-        
-        # 追加スキル（要件にないがエンジニアが持っているスキル）
-        additional_skills = self._find_additional_skills(
-            engineer_skill_set, 
-            required_skills + optional_skills
-        )
-        
-        # スコア計算
-        total_weight = sum(r.get('weight', 1.0) for r in project_requirements)
-        matched_weight = sum(m.get('weight', 1.0) for m in required_matches + optional_matches)
-        
-        # カバー率（必須スキルのみで計算）
-        required_weight = sum(r.get('weight', 1.0) for r in required_skills)
-        matched_required_weight = sum(m.get('weight', 1.0) for m in required_matches)
-        
-        coverage = (matched_required_weight / required_weight) if required_weight > 0 else 1.0
-        
-        # マッチスコア（カバー率とスキルレベルのマッチ度を考慮）
-        level_scores = [m.get('level_score', 0) * m.get('weight', 1.0) 
-                       for m in required_matches + optional_matches]
-        avg_level_score = sum(level_scores) / len(level_scores) if level_scores else 0
-        
-        match_score = (coverage * 0.7) + (avg_level_score * 0.3)
-        
-        # 結果を構築
-        result.update({
-            'match_score': min(1.0, max(0.0, match_score)),
-            'coverage': min(1.0, max(0.0, coverage)),
-            'matches': required_matches + optional_matches,
-            'missing_skills': missing_required,
-            'additional_skills': additional_skills
-        })
-        
-        return result
-        
-    def _match_skill_requirements(
-        self, 
-        requirements: List[Dict[str, Any]], 
-        engineer_skills: Dict[str, Any],
-        is_required: bool = True
-    ) -> Tuple[List[Dict], List[Dict]]:
-        """スキル要件とエンジニアのスキルをマッチングする"""
+        # マッチング結果
         matches = []
-        missing = []
+        total_weight = 0
+        matched_weight = 0
         
-        for req in requirements:
-            req_skill = req.get('skill', '').strip()
-            if not req_skill:
-                continue
-                
-            normalized_req = self.normalize_skill(req_skill)
-            if not normalized_req:
-                continue
-                
-            req_level = self._normalize_skill_level(req.get('level', ''))
+        # 各要件に対してマッチング
+        for req in project_requirements:
+            req_skill = req.get('skill', '').lower()
+            req_level = req.get('level', '').lower()
             req_weight = float(req.get('weight', 1.0))
-            req_min_exp = float(req.get('min_experience', 0))
-            preferred_skills = [self.normalize_skill(s) for s in req.get('preferred', []) 
-                              if self.normalize_skill(s)]
             
-            # マッチングを試みる
+            # 要件のスキルを正規化
+            normalized_req = self.normalize_skill(req_skill)
+            
+            # マッチしたスキルを探す
             matched = False
+            match_score = 0.0
             best_match = None
-            best_score = 0.0
             
-            for eng_skill, eng_data in engineer_skills.items():
-                # スキル名のマッチングスコアを計算
+            for eng_skill, eng_data in engineer_skill_set.items():
+                # スキル名が完全一致またはエイリアスに含まれるか
                 if eng_skill == normalized_req or eng_skill in self.skill_aliases.get(normalized_req, []):
                     # レベルのマッチング
                     level_score = 1.0
