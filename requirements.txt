@@ -1,0 +1,42 @@
+# Core
+Flask
+Flask-Cors
+python-dotenv
+PyPDF2
+docx2txt
+ruamel.yaml
+python-multipart
+Werkzeug
+
+# Database
+SQLAlchemy
+SQLModel
+
+# Gmail API
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+
+# Utilities
+pydantic
+
+# Text extraction & parsing
+pymupdf
+pdfplumber
+python-docx
+
+# Fuzzy matching
+rapidfuzz
+
+# HTML parsing for Gmail
+beautifulsoup4
+lxml
+
+# AI / Vector Search
+sentence-transformers
+numpy
+scikit-learn
+google-genai
+
+# Others
+importlib-metadata

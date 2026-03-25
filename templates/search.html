@@ -1,0 +1,362 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <div class="mb-8">
+        <h2 class="text-3xl font-bold mb-4 text-gray-800">
+            <i class="fas fa-search text-blue-600 mr-2"></i>高度な案件検索
+        </h2>
+
+        <!-- 検索フォーム -->
+        <form id="searchForm"
+            class="bg-white rounded-lg shadow-md p-6 mb-6 transform transition duration-500 hover:shadow-lg"
+            onsubmit="return false;">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+
+                <!-- キーワード検索 -->
+                <div class="col-span-1 md:col-span-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">フリーワード検索（スキル・商流など）</label>
+                    <div class="relative flex items-center">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="fas fa-search text-gray-400"></i>
+                        </span>
+                        <input type="text" id="searchInput"
+                            class="block w-full pl-10 pr-20 border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 py-3"
+                            placeholder="Java AWS リモート 単価80万 （スペース区切り）">
+
+                        <button type="button" id="searchBtn"
+                            class="absolute right-2 px-4 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 transition">
+                            検索
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 単価範囲 -->
+                <div class="col-span-1 md:col-span-2">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        単価範囲（万円）
+                    </label>
+                    <div class="flex items-center space-x-4">
+                        <input type="number" id="minPrice" step="1"
+                            class="w-24 border-gray-300 rounded-md shadow-sm text-sm p-2 bg-gray-50 focus:bg-white"
+                            placeholder="下限">
+                        <span class="text-gray-500">〜</span>
+                        <input type="number" id="maxPrice" step="1"
+                            class="w-24 border-gray-300 rounded-md shadow-sm text-sm p-2 bg-gray-50 focus:bg-white"
+                            placeholder="上限">
+                        <span class="text-gray-500 text-sm">万円</span>
+                    </div>
+                </div>
+
+                <!-- アクションボタン -->
+                <div class="col-span-1 md:col-span-2 flex justify-end items-end">
+                    <button type="button" id="resetBtn"
+                        class="mr-4 px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                        リセット
+                    </button>
+                    <!-- メインの検索ボタン -->
+                    <button type="button" id="mainSearchBtn"
+                        class="px-6 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 transform hover:scale-105 transition duration-150">
+                        <i class="fas fa-search mr-2"></i>絞り込み検索
+                    </button>
+                </div>
+
+            </div>
+        </form>
+    </div>
+
+    <!-- 検索結果メッセージ -->
+    <div id="loadingIndicator" class="text-center py-12" style="display: none;">
+        <i class="fas fa-spinner fa-spin text-4xl text-blue-500"></i>
+        <p class="mt-4 text-gray-600">検索中...</p>
+    </div>
+
+    <div id="noResults" class="text-center py-12 bg-white rounded-lg shadow border border-gray-100"
+        style="display: none;">
+        <div class="text-gray-400 mb-4">
+            <i class="fas fa-inbox text-6xl"></i>
+        </div>
+        <p class="text-xl text-gray-600">該当する案件が見つかりませんでした。</p>
+        <p class="text-gray-500 mt-2">条件を変更して再度お試しください。</p>
+    </div>
+
+    <div id="resultsHeader" class="flex justify-between items-center mb-4" style="display: none;">
+        <span class="text-gray-600">
+            <span id="resultCount" class="font-bold text-gray-900">0</span> 件の案件が見つかりました
+        </span>
+    </div>
+
+    <!-- 検索結果リスト -->
+    <div id="resultsContainer" class="space-y-4">
+        <!-- JSでここに要素が挿入されます -->
+    </div>
+</div>
+
+<!-- テンプレート（非表示） -->
+<template id="projectTemplate">
+    <div
+        class="project-card bg-white rounded-lg shadow p-6 hover:shadow-lg transition-shadow duration-200 border-l-4 border-blue-500 mb-4">
+        <div class="flex justify-between items-start">
+            <div class="flex-1 w-full">
+                <!-- タイトル行 -->
+                <div class="flex items-center mb-2 flex-wrap">
+                    <!-- 件名リンク -->
+                    <a href="#" target="_blank" rel="noopener noreferrer"
+                        class="project-title text-xl font-bold text-blue-700 hover:text-blue-900 underline mr-3 break-all"></a>
+
+                    <!-- コピーボタン -->
+                    <button type="button" class="copy-btn text-gray-400 hover:text-blue-600 mr-2 p-1" title="件名をコピー">
+                        <i class="far fa-copy"></i>
+                    </button>
+
+                    <span
+                        class="project-flow px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 border border-green-200 whitespace-nowrap"
+                        style="display:none"></span>
+                </div>
+
+                <div class="flex items-center text-sm text-gray-500 mb-4 space-x-4 flex-wrap gap-y-2">
+                    <span class="flex items-center project-price-container whitespace-nowrap">
+                        <i class="fas fa-yen-sign mr-1"></i>
+                        <span class="project-price"></span>
+                    </span>
+                    <span class="flex items-center project-location-container whitespace-nowrap" style="display:none">
+                        <i class="fas fa-map-marker-alt mr-1"></i>
+                        <span class="project-location"></span>
+                    </span>
+                    <span class="flex items-center project-remote-container whitespace-nowrap" style="display:none">
+                        <i class="fas fa-laptop-house mr-1"></i>
+                        <span class="project-remote"></span>
+                    </span>
+                    <span class="flex items-center text-gray-400 whitespace-nowrap">
+                        <i class="far fa-clock mr-1"></i>
+                        <span class="project-date"></span>
+                    </span>
+                </div>
+
+                <div class="project-description mb-4 text-gray-700 text-sm line-clamp-2 break-all"></div>
+
+                <div class="project-skills flex flex-wrap gap-2"></div>
+            </div>
+        </div>
+    </div>
+</template>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Vanilla JS Implementation
+    document.addEventListener('DOMContentLoaded', function () {
+        console.log('Search Page Loaded');
+
+        const searchInput = document.getElementById('searchInput');
+        const minPriceInput = document.getElementById('minPrice');
+        const maxPriceInput = document.getElementById('maxPrice');
+        const searchBtn = document.getElementById('searchBtn');
+        const mainSearchBtn = document.getElementById('mainSearchBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const noResults = document.getElementById('noResults');
+        const resultsContainer = document.getElementById('resultsContainer');
+        const resultsHeader = document.getElementById('resultsHeader');
+        const resultCount = document.getElementById('resultCount');
+        const projectTemplate = document.getElementById('projectTemplate');
+
+        console.log('Elements:', { searchInput, searchBtn, mainSearchBtn, resetBtn });
+
+        // 初期検索実行
+        performSearch();
+
+        // イベントリスナー設定
+        if (searchBtn) searchBtn.addEventListener('click', performSearch);
+        if (mainSearchBtn) mainSearchBtn.addEventListener('click', performSearch);
+        if (resetBtn) resetBtn.addEventListener('click', resetForm);
+
+        if (searchInput) {
+            searchInput.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    performSearch();
+                }
+            });
+        }
+
+        // コピー機能用トースト表示（簡易）
+        function showToast(message) {
+            const toast = document.createElement('div');
+            toast.className = 'fixed bottom-4 right-4 bg-gray-800 text-white px-4 py-2 rounded shadow-lg z-50 text-sm';
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.remove();
+            }, 2000);
+        }
+
+        function resetForm() {
+            console.log('Resetting form...');
+            searchInput.value = '';
+            minPriceInput.value = '';
+            maxPriceInput.value = '';
+            resultsContainer.innerHTML = '';
+            resultsHeader.style.display = 'none';
+            noResults.style.display = 'none';
+        }
+
+        async function performSearch() {
+            console.log('Performing search...');
+
+            // UI更新
+            loadingIndicator.style.display = 'block';
+            noResults.style.display = 'none';
+            resultsHeader.style.display = 'none';
+            resultsContainer.innerHTML = '';
+
+            try {
+                // クエリパラメータ構築
+                const params = new URLSearchParams();
+                let q = searchInput.value.trim();
+
+                // カンマとスペース両方で分割して、再度スペース区切りに直す（API側はスペース区切り前提が多いので）
+                // ただし、API側(db_manager)が FTS MATCH でスペース区切りをAND/OR検索するため、
+                // 単純に params['q'] として渡すのが最も安全。
+                // ユーザーがカンマで区切ってもスペースに変えてあげる
+                if (q) {
+                    q = q.replace(/[,、]/g, ' '); // 読点やカンマをスペースに
+                    params.append('q', q);
+                }
+
+                if (minPriceInput.value) params.append('min_salary', minPriceInput.value);
+                if (maxPriceInput.value) params.append('max_salary', maxPriceInput.value);
+
+                const url = `/api/search?${params.toString()}`;
+                console.log('Fetching:', url);
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                console.log('Response:', data);
+
+                if (data.success === true) {
+                    renderResults(data.projects);
+                } else {
+                    alert('検索エラー: ' + (data.error || data.message || '不明なエラー'));
+                }
+
+            } catch (error) {
+                console.error('Search error:', error);
+                alert('通信エラーが発生しました。');
+            } finally {
+                loadingIndicator.style.display = 'none';
+            }
+        }
+
+        function renderResults(projects) {
+            if (!projects || projects.length === 0) {
+                noResults.style.display = 'block';
+                return;
+            }
+
+            resultCount.textContent = projects.length;
+            resultsHeader.style.display = 'flex';
+
+            projects.forEach(project => {
+                const clone = projectTemplate.content.cloneNode(true);
+
+                // 件名とリンク
+                const titleLink = clone.querySelector('.project-title');
+                titleLink.textContent = project.title;
+                // Gmail URLがなければ無効なリンクにしない
+                if (project.gmail_url) {
+                    titleLink.href = project.gmail_url;
+                } else {
+                    titleLink.href = "javascript:void(0)";
+                    titleLink.classList.add('text-gray-500', 'no-underline');
+                    titleLink.classList.remove('text-blue-700', 'hover:text-blue-900', 'underline');
+                }
+
+                // 件名コピーボタン
+                const copyBtn = clone.querySelector('.copy-btn');
+                copyBtn.addEventListener('click', function () {
+                    navigator.clipboard.writeText(project.title).then(() => {
+                        const icon = copyBtn.querySelector('i');
+                        icon.classList.remove('far', 'fa-copy');
+                        icon.classList.add('fas', 'fa-check');
+                        setTimeout(() => {
+                            icon.classList.remove('fas', 'fa-check');
+                            icon.classList.add('far', 'fa-copy');
+                        }, 1000);
+                        showToast('件名をコピーしました');
+                    });
+                });
+
+                if (project.commercial_flow) {
+                    const flow = clone.querySelector('.project-flow');
+                    flow.textContent = project.commercial_flow;
+                    flow.style.display = 'inline-block';
+                }
+
+                // 価格
+                const priceSpan = clone.querySelector('.project-price');
+                priceSpan.textContent = formatPrice(project);
+
+                // 場所
+                if (project.location) {
+                    const loc = clone.querySelector('.project-location-container');
+                    loc.querySelector('.project-location').textContent = project.location;
+                    loc.style.display = 'flex';
+                }
+
+                // リモート
+                if (project.remote_type) {
+                    const rem = clone.querySelector('.project-remote-container');
+                    rem.querySelector('.project-remote').textContent = project.remote_type;
+                    rem.style.display = 'flex';
+                }
+
+                // 日付
+                clone.querySelector('.project-date').textContent = formatDate(project.created_at);
+
+                // 説明
+                clone.querySelector('.project-description').textContent = project.description || '';
+
+                // スキル
+                const skillsContainer = clone.querySelector('.project-skills');
+                if (project.matched_skills && project.matched_skills.length > 0) {
+                    project.matched_skills.forEach(skill => {
+                        const skillName = typeof skill === 'string' ? skill : skill.name;
+                        const span = document.createElement('span');
+                        span.className = 'px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200'; // マッチしたスキルは青
+                        span.textContent = skillName;
+                        skillsContainer.appendChild(span);
+                    });
+                } else if (project.skills && project.skills.length > 0) {
+                    project.skills.forEach(skill => {
+                        const skillName = skill.name || skill;
+                        const span = document.createElement('span');
+                        span.className = 'px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800 border border-gray-200';
+                        span.textContent = skillName;
+                        skillsContainer.appendChild(span);
+                    });
+                }
+
+                resultsContainer.appendChild(clone);
+            });
+        }
+
+        function formatPrice(project) {
+            if (project.salary_min) {
+                return `${project.salary_min}万円〜`;
+            }
+            if (project.salary) {
+                return `${project.salary}万円〜`;
+            }
+            return '相談';
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '';
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('ja-JP') + ' ' + date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+        }
+    });
+</script>
+{% endblock %}

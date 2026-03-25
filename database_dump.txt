@@ -1,0 +1,59 @@
+
+=== テーブル一覧 ===
+- engineers
+- project_requirements
+- projects
+- skills
+- sqlite_sequence
+
+=== engineers テーブルの内容 ===
+カラム: id, name, email, current_role, location, experience_years, skills, created_at, updated_at
+レコード数: 2
+データ:
+[1] {"id": null, "name": "山田太郎", "email": "yamada@example.com", "current_role": "シニアエンジニア", "location": "東京", "experience_years": 8.5, "skills": null, "created_at": "2025-06-11 10:59:09", "updated_at": "2025-06-11 10:59:09"}
+[2] {"id": "1", "name": null, "email": null, "current_role": null, "location": null, "experience_years": null, "skills": "テスト,アジャイル,Git,GitHub,JavaScript,Java", "created_at": "2025-06-11 11:04:37", "updated_at": "2025-06-12 02:17:52"}
+
+=== project_requirements テーブルの内容 ===
+カラム: id, project_id, skill, level, weight
+レコード数: 11
+データ:
+[1] {"id": 1, "project_id": 1, "skill": "Python", "level": "expert", "weight": 3}
+[2] {"id": 2, "project_id": 1, "skill": "Django", "level": "intermediate", "weight": 2}
+[3] {"id": 3, "project_id": 1, "skill": "JavaScript", "level": "intermediate", "weight": 2}
+[4] {"id": 4, "project_id": 1, "skill": "HTML/CSS", "level": "basic", "weight": 1}
+[5] {"id": 5, "project_id": 2, "skill": "React Native", "level": "intermediate", "weight": 3}
+[6] {"id": 6, "project_id": 2, "skill": "TypeScript", "level": "intermediate", "weight": 2}
+[7] {"id": 7, "project_id": 2, "skill": "Firebase", "level": "basic", "weight": 1}
+[8] {"id": 8, "project_id": 3, "skill": "Python", "level": "intermediate", "weight": 2}
+[9] {"id": 9, "project_id": 3, "skill": "SQL", "level": "intermediate", "weight": 2}
+[10] {"id": 10, "project_id": 3, "skill": "AWS", "level": "basic", "weight": 1}
+[11] {"id": 11, "project_id": 3, "skill": "データ分析", "level": "intermediate", "weight": 2}
+
+外部キー関係:
+- <sqlite3.Row object at 0x0000026697DB4970>
+
+=== projects テーブルの内容 ===
+カラム: id, name, client_name, description, location, work_type, start_date, duration_months, min_budget, max_budget
+レコード数: 3
+データ:
+[1] {"id": 1, "name": "ECサイト開発", "client_name": "株式会社ABC", "description": "大手小売業向けECサイトの開発", "location": "東京", "work_type": "リモート可", "start_date": "2025-07-12", "duration_months": 6, "min_budget": 5000000, "max_budget": 8000000}
+[2] {"id": 2, "name": "モバイルアプリ開発", "client_name": "株式会社XYZ", "description": "健康管理アプリの開発", "location": "大阪", "work_type": "ハイブリッド", "start_date": "2025-06-27", "duration_months": 4, "min_budget": 4000000, "max_budget": 6000000}
+[3] {"id": 3, "name": "データ分析基盤構築", "client_name": "株式会社データソリューション", "description": "ビッグデータ分析基盤の構築", "location": "リモート", "work_type": "リモート", "start_date": "2025-07-27", "duration_months": 3, "min_budget": 3000000, "max_budget": 5000000}
+
+=== skills テーブルの内容 ===
+カラム: id, engineer_id, name, level
+レコード数: 2
+データ:
+[1] {"id": 1, "engineer_id": 1, "name": "Python", "level": "expert"}
+[2] {"id": 2, "engineer_id": 1, "name": "JavaScript", "level": "intermediate"}
+
+外部キー関係:
+- <sqlite3.Row object at 0x0000026697DB4C70>
+
+=== sqlite_sequence テーブルの内容 ===
+カラム: name, seq
+レコード数: 3
+データ:
+[1] {"name": "skills", "seq": 2}
+[2] {"name": "projects", "seq": 3}
+[3] {"name": "project_requirements", "seq": 11}
