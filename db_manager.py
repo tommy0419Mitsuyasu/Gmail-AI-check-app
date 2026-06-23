@@ -120,6 +120,10 @@ class DBManager:
             cursor.execute('DROP TRIGGER IF EXISTS projects_ad')
             cursor.execute('DROP TRIGGER IF EXISTS projects_au')
 
+            # インデックスの作成
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_projects_email ON projects(email_message_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_project_skills_skill ON project_skills(skill_id)')
+
             conn.commit()
             logging.info("Database initialized successfully.")
 
@@ -250,7 +254,8 @@ class DBManager:
         conn.row_factory = sqlite3.Row
         
         try:
-            query_parts = ["SELECT p.*, e.received_at FROM projects p JOIN emails e ON p.email_message_id = e.message_id"]
+            # クエリの基本部分を構築 (email_bodyも取得するよう変更)
+            query_parts = ["SELECT p.*, e.received_at, e.body as email_body FROM projects p JOIN emails e ON p.email_message_id = e.message_id"]
             params = []
             where_clauses = []
             
@@ -305,21 +310,33 @@ class DBManager:
             cursor = conn.execute(full_query, params)
             
             results = []
+            project_ids = []
             for row in cursor:
                 # 辞書に変換
                 row_dict = dict(row)
+                row_dict['skills'] = []
+                results.append(row_dict)
+                project_ids.append(row_dict['id'])
                 
-                # 関連スキルを取得
-                skill_cursor = conn.execute('''
-                SELECT s.name, ps.type 
+            if project_ids:
+                placeholders = ','.join('?' * len(project_ids))
+                skill_cursor = conn.execute(f'''
+                SELECT ps.project_id, s.name, ps.type 
                 FROM skills s 
                 JOIN project_skills ps ON s.id = ps.skill_id 
-                WHERE ps.project_id = ?
-                ''', (row['id'],))
+                WHERE ps.project_id IN ({placeholders})
+                ''', project_ids)
                 
-                row_dict['skills'] = [dict(s) for s in skill_cursor.fetchall()]
-                results.append(row_dict)
-                
+                skills_by_project = {}
+                for s in skill_cursor.fetchall():
+                    pid = s['project_id']
+                    if pid not in skills_by_project:
+                        skills_by_project[pid] = []
+                    skills_by_project[pid].append({'name': s['name'], 'type': s['type']})
+                    
+                for row_dict in results:
+                    row_dict['skills'] = skills_by_project.get(row_dict['id'], [])
+                    
             return results
 
         except sqlite3.Error as e:

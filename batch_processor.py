@@ -101,26 +101,54 @@ class BatchProcessor:
         logging.info(f"Searching emails with query: {query}")
 
         try:
-            # メッセージ一覧の取得
-            results = self.service.users().messages().list(
-                userId='me', q=query, maxResults=max_results
-            ).execute()
-            messages = results.get('messages', [])
+            messages = []
+            page_token = None
             
+            # ページネーション対応でメールIDリストを取得
+            while len(messages) < max_results:
+                results = self.service.users().messages().list(
+                    userId='me', q=query, maxResults=min(500, max_results - len(messages)), pageToken=page_token
+                ).execute()
+                
+                msgs = results.get('messages', [])
+                if not msgs:
+                    break
+                    
+                messages.extend(msgs)
+                
+                page_token = results.get('nextPageToken')
+                if not page_token:
+                    break
+                    
             if not messages:
                 logging.info("No messages found.")
                 return
 
-            logging.info(f"Found {len(messages)} messages. Processing...")
+            logging.info(f"Found {len(messages)} messages. Checking against DB...")
 
-            # 処理済みチェックと並列処理
+            # 処理済みチェック
+            conn = db_manager._get_connection()
+            c = conn.cursor()
+            
+            new_message_ids = []
+            for msg in messages:
+                msg_id = msg['id']
+                c.execute('SELECT 1 FROM emails WHERE message_id = ?', (msg_id,))
+                if not c.fetchone():
+                    new_message_ids.append(msg_id)
+                    
+            conn.close()
+            
+            logging.info(f"{len(messages) - len(new_message_ids)} messages already processed. Processing {len(new_message_ids)} new messages...")
+
+            if not new_message_ids:
+                return
+
+            # 並列処理 (googleapiclientはスレッドセーフではないため max_workers=1 で逐次処理となる)
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 futures = []
-                for msg in messages:
-                    # すでにDBにあるかチェック（db_managerにexists機能を追加するのも手だが、saveでIGNOREするのでそのまま投げる）
-                    # ただしAPI制限節約のため、できればチェックしたい。
-                    # ここではシンプルにsaveの重複排除に任せるが、fetch_detailは行うことになる。
-                    futures.append(executor.submit(self._process_single_message, msg['id']))
+                for msg_id in new_message_ids:
+                    futures.append(executor.submit(self._process_single_message, msg_id))
 
                 for future in as_completed(futures):
                     try:

@@ -59,18 +59,12 @@ def clear_project_data(message_id: str):
 
 def reprocess_all():
     """全メールを再処理する"""
-    if os.getenv('ENABLE_AI_EXTRACTOR', 'false').lower() != 'true':
-        logging.error("ENABLE_AI_EXTRACTOR is not set to true. Aborting.")
-        return
-
     emails = get_all_emails()
     logging.info(f"Found {len(emails)} emails. Starting reprocessing...")
     
     success_count = 0
     skip_count = 0
     error_count = 0
-    
-    ai_enabled = True
     
     for i, email in enumerate(emails):
         msg_id = email['message_id']
@@ -83,29 +77,8 @@ def reprocess_all():
             # 1. 既存データの削除
             clear_project_data(msg_id)
             
-            # 2. AI解析
-            extracted_data = None
-            
-            if ai_enabled:
-                # APIレート制限への配慮 (AI有効時のみ)
-                time.sleep(4)
-                try:
-                    # use_ai=True で呼び出し（429なら例外が飛ぶ）
-                    extracted_data = skill_extractor.extract_all(body, use_ai=True)
-                except Exception as e:
-                    error_str = str(e)
-                    if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                        logging.warning("Rate limit hit (429). Disabling AI for all future emails. Switching to Regex fallback.")
-                        ai_enabled = False
-                        # フォールバック実行
-                        extracted_data = skill_extractor.extract_all(body, use_ai=False)
-                    else:
-                        logging.error(f"AI error: {e}")
-                        # その他のエラーでもフォールバック
-                        extracted_data = skill_extractor.extract_all(body, use_ai=False)
-            else:
-                # AI無効化済みなら最初からRegexモード
-                extracted_data = skill_extractor.extract_all(body, use_ai=False)
+            # 2. 解析 (ルールベース)
+            extracted_data = skill_extractor.extract_all(body)
             
             if not extracted_data:
                 logging.error(f" -> Failed to extract data for {msg_id}")

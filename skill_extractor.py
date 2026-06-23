@@ -12,7 +12,6 @@ import time
 import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Union
-from google import genai
 from datetime import datetime
 
 # エンジニアタイプの定義
@@ -62,17 +61,6 @@ except ImportError as e:
     REZUME_PARSER_AVAILABLE = False
     logging.warning(f"Rezume Parser が利用できません: {str(e)}")
     logging.warning("pip install nltk を実行してインストールしてください。")
-
-# 外部モジュールのインポート
-try:
-    from .external_skill_service import external_skill_service
-except ImportError:
-    # 相対インポートに失敗した場合は絶対パスで再試行
-    try:
-        from external_skill_service import external_skill_service
-    except ImportError:
-        logging.warning("外部スキルサービスモジュールのインポートに失敗しました。外部スキル機能は無効化されます。")
-        external_skill_service = None
 
 # スキルの重要度キーワード
 IMPORTANCE_KEYWORDS = {
@@ -185,8 +173,8 @@ class SkillExtractor:
         if len(self.skill_db) < 10:  # スキルが少なすぎる場合は警告
             logging.warning("スキルDBの登録数が少なすぎます。設定を確認してください。")
         
-        self.enable_external_skills = enable_external_skills
-        self.external_service = external_skill_service if external_skill_service and enable_external_skills else None
+        self.enable_external_skills = False
+        self.external_service = None
         
         # Rezume Parser の初期化
         self.rezume_parser = RezumeParser() if REZUME_PARSER_AVAILABLE else None
@@ -194,10 +182,6 @@ class SkillExtractor:
             logging.info("Rezume Parser が有効化されました。")
         else:
             logging.warning("Rezume Parser は無効です。スキル抽出は基本機能のみが使用されます。")
-        
-        if self.enable_external_skills and not self.external_service:
-            logging.warning("外部スキルサービスが有効ですが、初期化に失敗しました。外部スキル機能は無効化されます。")
-            self.enable_external_skills = False
             
         self._build_skill_index()
         logging.info("スキル抽出器の初期化が完了しました")
@@ -867,7 +851,7 @@ class SkillExtractor:
         return {k: v for k, v in categories.items() if v}
         
 
-    def extract_skills(self, text: str, min_confidence: float = 0.6, use_rezume: bool = True, use_external: bool = None) -> Dict[str, List[Dict]]:
+    def extract_skills(self, text: str, min_confidence: float = 0.6, use_rezume: bool = True) -> Dict[str, List[Dict]]:
         """
         テキストからスキルを抽出し、カテゴリ別に分類して返す
         
@@ -875,7 +859,6 @@ class SkillExtractor:
             text: 抽出対象のテキスト
             min_confidence: スキルとして認識する最小の信頼度 (0.0〜1.0)
             use_rezume: Rezume Parser を使用するかどうか
-            use_external: 外部スキルサービスを使用するかどうか（Noneの場合は設定に従う）
             
         Returns:
             カテゴリ別に分類されたスキルの辞書
@@ -958,51 +941,6 @@ class SkillExtractor:
                     logging.warning("Rezume Parser に extract_skills メソッドが存在しません")
             except Exception as e:
                 logging.error(f"Rezume Parser でのスキル抽出中にエラーが発生しました: {str(e)}")
-        
-        # 外部サービスを使用する場合
-        if use_external is None:
-            use_external = self.enable_external_skills
-            
-        if use_external and self.external_service:
-            try:
-                if hasattr(self.external_service, 'extract_skills'):
-                    external_skills = self.external_service.extract_skills(text)
-                    if isinstance(external_skills, list):
-                        for skill_data in external_skills:
-                            if not isinstance(skill_data, dict):
-                                continue
-                                
-                            skill = skill_data.get('skill')
-                            if not skill:
-                                continue
-                                
-                            # 既存のスキルを検索
-                            existing_skill = next((s for s in candidate_skills if isinstance(s, dict) and s.get('skill', '').lower() == skill.lower()), None)
-                            
-                            if existing_skill:
-                                # 既存のスキルの信頼度を更新（高い方を採用）
-                                existing_confidence = float(existing_skill.get('confidence', 0) or 0)
-                                new_confidence = float(skill_data.get('confidence', 0.5) or 0.5)
-                                if new_confidence > existing_confidence:
-                                    existing_skill['confidence'] = new_confidence
-                                    existing_skill['source'] = 'external_service'
-                            else:
-                                # 新しいスキルを追加（信頼度が閾値以上の場合のみ）
-                                skill_confidence = float(skill_data.get('confidence', 0.5) or 0.5)
-                                if skill_confidence >= min_confidence:
-                                    candidate_skills.append({
-                                        'skill': skill,
-                                        'type': skill_data.get('type', 'other'),
-                                        'context': skill_data.get('context', ''),
-                                        'importance': float(skill_data.get('importance', 0.5) or 0.5),
-                                        'confidence': skill_confidence,
-                                        'experience_years': skill_data.get('experience_years'),
-                                        'categories': skill_data.get('categories', []),
-                                        'related_skills': skill_data.get('related_skills', []),
-                                        'source': 'external_service'
-                                    })
-            except Exception as e:
-                logging.error(f"外部スキルサービスでのスキル抽出中にエラーが発生しました: {str(e)}")
         
         # candidate_skills が None の場合の処理を追加
         if candidate_skills is None:
@@ -1140,32 +1078,18 @@ class SkillExtractor:
         
         return formatted
 
-    def extract_all(self, text: str, use_ai: bool = True) -> Dict[str, Any]:
+    def extract_all(self, text: str, use_ai: bool = False) -> Dict[str, Any]:
         """
-        AIを使用してテキストから案件情報とスキル情報を一括抽出する
+        テキストから案件情報とスキル情報を一括抽出する（正規表現・ルールベースのみ）
         
         Args:
             text: 解析対象のテキスト
-            use_ai: AIを使用するかどうか (Trueなら環境変数もチェックして使用)
+            use_ai: 互換性維持のためのパラメータ（現在は使用されません）
             
         Returns:
             Dict: 案件情報とスキル情報の統合辞書
         """
-        if use_ai and os.getenv('ENABLE_AI_EXTRACTOR', 'false').lower() == 'true':
-            try:
-                ai_result = self._analyze_with_llm(text)
-                if ai_result:
-                    logging.info("AI extraction successful")
-                    return ai_result
-            except Exception as e:
-                error_str = str(e)
-                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                    # レート制限の場合はフォールバックロジックに移行する
-                    logging.warning("AI rate limit reached. Falling back to rule-based extraction.")
-                else:
-                    logging.error(f"AI extraction failed: {e}")
-        
-        # フォールバック: 既存ロジックの組み合わせ
+        # 既存ロジックの組み合わせ
         project_info = self.extract_project_info(text)
         skills_dict = self.extract_skills(text)
         
@@ -1230,65 +1154,6 @@ class SkillExtractor:
         if engineer_score > project_score and engineer_score > 2:
             return 'engineer'
         return 'project'
-
-    def _analyze_with_llm(self, text: str) -> Optional[Dict[str, Any]]:
-        """Gemini APIを使用して解析 (google-genai SDK使用)"""
-        api_key = os.getenv('GEMINI_API_KEY')
-        if not api_key:
-            return None
-            
-        try:
-            # 新しいClient初期化
-            client = genai.Client(api_key=api_key)
-            
-            prompt = f"""
-            あなたはSES案件情報の抽出エキスパートです。
-            以下のメール本文から情報を抽出し、JSON形式で出力してください。
-            
-            # ルール
-            1. 金額は「円」単位の整数（例: 600000）。文字列は不可。
-            2. スキルは "skills" リストに格納し、重要度が高い/必須なら type="must"、尚可なら "nice_to_have" とする。
-            3. typeフィールドで "project"（案件）か "engineer"（人材/スキルシート）かを判定する。
-               - 「要員提案」「スキルシート」「空き情報」などは "engineer"
-               - 「案件募集」「募集」などは "project"
-            4. JSONのみを出力すること。コードブロック不要。
-            
-            # 出力フォーマット
-            {{
-                "type": "project" | "engineer",
-                "title": "件名または要約（30文字以内）",
-                "min_price": 600000,
-                "max_price": 800000,
-                "price_text": "60〜80万",
-                "location": "リモートなど",
-                "commercial_flow": "エンド直など",
-                "remote_type": "フルリモート/一部リモート/常駐",
-                "description": "200文字以内の概要",
-                "skills": [
-                    {{ "name": "Java", "type": "must" }},
-                    {{ "name": "AWS", "type": "nice_to_have" }}
-                ]
-            }}
-            
-            # 本文
-            {text[:8000]}
-            """
-            
-            response = client.models.generate_content(
-                model='gemini-flash-latest',
-                contents=prompt
-            )
-            
-            if not response.text:
-                logging.warning("Gemini returned empty text")
-                return None
-                
-            cleaned_text = re.sub(r'```json\n|\n```', '', response.text).strip()
-            return json.loads(cleaned_text)
-            
-        except Exception as e:
-            logging.error(f"Gemini generation error: {e}")
-            raise e
 
     def extract_project_info(self, text: str) -> Dict[str, Any]:
         """

@@ -284,15 +284,6 @@ def normalize_skill(skill: str) -> str:
     skill = re.sub(r'\s*\d+(\.\d+)*$', '', skill).strip()
     
     return skill
-    # 小文字化して前後の空白を削除
-    skill = skill.lower().strip()
-    # 不要な文字を削除
-    skill = re.sub(r'[()\[\]{}<>/+]', ' ', skill)
-    # スペースやハイフンの正規化
-    skill = re.sub(r'[\s-]+', ' ', skill).strip()
-    # バージョン番号の正規化 (例: python3 -> python)
-    skill = re.sub(r'\s*\d+(\.\d+)*$', '', skill)
-    return skill
 
 def get_related_skills(skill: str) -> List[str]:
     """関連するスキルを取得"""
@@ -491,7 +482,7 @@ def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: L
     original_skill_names = {}
     
     for skill_data in candidate_skills:
-        name = skill_data.get('name', '')
+        name = skill_data.get('name', '') or skill_data.get('skill', '')
         if not name:
             continue
             
@@ -528,6 +519,27 @@ def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: L
             print(f"Vector encoding error: {e}")
             # エラー時は空の辞書のまま進む（通常の文字マッチングのみになる）
     
+    # 案件要件のベクトルをキャッシュ（一括エンコード）
+    requirement_vectors = {}
+    req_skills_to_encode = []
+    for req in project_requirements:
+        req_skill = req.get('skill', '')
+        if req_skill:
+            req_skill_normalized = normalize_skill(req_skill)
+            if req_skill_normalized and req_skill_normalized not in req_skills_to_encode:
+                req_skills_to_encode.append(req_skill_normalized)
+                
+    if req_skills_to_encode:
+        try:
+            req_vectors_arr = vector_engine.encode(req_skills_to_encode)
+            if len(req_skills_to_encode) == 1 and req_vectors_arr.ndim == 1:
+                req_vectors_arr = req_vectors_arr.reshape(1, -1)
+            for i, skill in enumerate(req_skills_to_encode):
+                if i < len(req_vectors_arr):
+                    requirement_vectors[skill] = req_vectors_arr[i]
+        except Exception as e:
+            print(f"Vector encoding error for requirements: {e}")
+
     # 各プロジェクト要件に対してマッチングを実行
     for req in project_requirements:
         req_skill = req.get('skill', '')
@@ -592,8 +604,10 @@ def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: L
         best_original_name = None
         best_domain_score = 0.0
         
-        # 検索対象スキルのベクトルを計算
-        req_vector = vector_engine.encode(req_skill_normalized)
+        # 検索対象スキルのベクトルを取得
+        req_vector = requirement_vectors.get(req_skill_normalized)
+        if req_vector is None:
+            continue
         
         # スキルのドメインを取得
         req_skill_domains = [

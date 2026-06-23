@@ -1,28 +1,6 @@
 // グローバル変数
 'use strict';
 
-// 動的コード評価を避けるためのヘルパー関数
-const safeEval = (code, context = {}) => {
-  // 許可された関数のみを実行
-  const allowedFunctions = {
-    // 必要な関数をここに追加
-  };
-  
-  try {
-    // コンテキストをセットアップ
-    const sandbox = {
-      ...allowedFunctions,
-      ...context
-    };
-    
-    // 関数を作成して実行
-    const fn = new Function(...Object.keys(sandbox), `return (${code})`);
-    return fn(...Object.values(sandbox));
-  } catch (error) {
-    console.error('Error in safeEval:', error);
-    return null;
-  }
-};
 
 const elements = {
     // ファイルアップロード関連
@@ -886,6 +864,7 @@ function openGmailWithProject(project) {
 // 案件を表示する関数
 function displayProjects(projects, searchSkills = []) {
     console.log('displayProjects を開始します', { projects, searchSkills });
+    window.topPageProjects = projects;
     
     const resultsContainer = document.getElementById('projectsList');
     if (!resultsContainer) {
@@ -1256,174 +1235,7 @@ document.addEventListener('click', function(event) {
 // DOMの読み込みが完了したら初期化を実行
 document.addEventListener('DOMContentLoaded', initializeApp);
 
-// エラーメッセージを表示する関数
-function showError(title, message, details = '') {
-    console.error(`${title}: ${message}`, details);
-    
-    const errorMessage = document.getElementById('errorMessage');
-    if (!errorMessage) return;
-    
-    // エラーメッセージ要素を表示
-    errorMessage.classList.remove('hidden');
-    errorMessage.classList.remove('bg-green-50', 'border-green-400', 'text-green-700');
-    errorMessage.classList.add('bg-red-50', 'border-red-400', 'text-red-700');
-    
-    // アイコンを設定
-    const errorIcon = document.getElementById('errorIcon');
-    if (errorIcon) {
-        errorIcon.className = 'fas fa-exclamation-circle text-red-400';
-    }
-    
-    // タイトルとメッセージを設定
-    const titleElement = errorMessage.querySelector('h3');
-    const messageElement = errorMessage.querySelector('div');
-    const errorText = document.getElementById('errorText');
-    const errorList = document.getElementById('errorList');
-    
-    if (titleElement) titleElement.textContent = title;
-    if (messageElement) messageElement.textContent = message;
-    
-    // 詳細がある場合は表示
-    if (details) {
-        if (Array.isArray(details)) {
-            if (errorList) errorList.innerHTML = details.map(detail => `<li>${detail}</li>`).join('');
-        } else if (typeof details === 'string') {
-            if (errorText) errorText.textContent = details;
-        }
-    }
-    
-    // 5秒後に自動的に非表示にする
-    setTimeout(() => {
-        errorMessage.classList.add('hidden');
-    }, 10000);
-}
 
-// 成功メッセージを表示する関数
-function showSuccess(title, message) {
-    console.log(`${title}: ${message}`);
-    
-    const errorMessage = document.getElementById('errorMessage');
-    if (!errorMessage) return;
-    
-    // 成功メッセージ要素を表示
-    errorMessage.classList.remove('hidden');
-    errorMessage.classList.remove('bg-red-50', 'border-red-400', 'text-red-700');
-    errorMessage.classList.add('bg-green-50', 'border-green-400', 'text-green-700');
-    
-    // アイコンを設定
-    const errorIcon = document.getElementById('errorIcon');
-    if (errorIcon) {
-        errorIcon.className = 'fas fa-check-circle text-green-400';
-    }
-    
-    // タイトルとメッセージを設定
-    const titleElement = errorMessage.querySelector('h3');
-    const messageElement = errorMessage.querySelector('div');
-    const errorText = document.getElementById('errorText');
-    const errorList = document.getElementById('errorList');
-    
-    if (titleElement) titleElement.textContent = title;
-    if (messageElement) messageElement.textContent = message;
-    
-    // エラーリストをクリア
-    if (errorList) errorList.innerHTML = '';
-    if (errorText) errorText.textContent = '';
-    
-    // 5秒後に自動的に非表示にする
-    setTimeout(() => {
-        errorMessage.classList.add('hidden');
-    }, 5000);
-}
-
-// スキル抽出結果を表示する関数
-function showResults(skills, extractedText = '') {
-    try {
-        console.log('スキル抽出結果を表示します:', skills);
-        
-        const skillsByCategory = document.getElementById('skillsByCategory');
-        const textPreview = document.getElementById('textPreview');
-        
-        if (!skillsByCategory) {
-            console.error('スキル表示用の要素が見つかりません');
-            return;
-        }
-        
-        // テキストプレビューを更新
-        if (textPreview) {
-            textPreview.textContent = extractedText || 'テキストを抽出できませんでした。';
-        }
-        
-        // スキルをカテゴリごとに表示
-        skillsByCategory.innerHTML = '';
-        
-        // スキルがオブジェクトの配列の場合（バックエンドの応答形式に応じて調整）
-        if (Array.isArray(skills)) {
-            // スキルをカテゴリごとにグループ化
-            const categories = {};
-            
-            skills.forEach(skill => {
-                const category = skill.category || 'その他';
-                if (!categories[category]) {
-                    categories[category] = [];
-                }
-                categories[category].push(skill);
-            });
-            
-            // カテゴリごとに表示
-            Object.entries(categories).forEach(([category, skills]) => {
-                const categoryElement = document.createElement('div');
-                categoryElement.className = 'mb-6';
-                categoryElement.innerHTML = `
-                    <h4 class="text-md font-medium text-gray-800 mb-2">${category}</h4>
-                    <div class="flex flex-wrap gap-2">
-                        ${skills.map(skill => `
-                            <label class="inline-flex items-center bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1 text-sm font-medium text-gray-700 cursor-pointer">
-                                <input type="checkbox" 
-                                       class="form-checkbox h-4 w-4 text-blue-600 rounded mr-2 skill-checkbox"
-                                       data-skill='${JSON.stringify(skill).replace(/'/g, '&#39;')}'
-                                       checked>
-                                ${skill.name || skill.skill_name}
-                            </label>
-                        `).join('')}
-                    </div>
-                `;
-                skillsByCategory.appendChild(categoryElement);
-            });
-        } 
-        // スキルがカテゴリ別のオブジェクトの場合
-        else if (typeof skills === 'object' && skills !== null) {
-            Object.entries(skills).forEach(([category, skillList]) => {
-                if (!Array.isArray(skillList) || skillList.length === 0) return;
-                
-                const categoryElement = document.createElement('div');
-                categoryElement.className = 'mb-6';
-                categoryElement.innerHTML = `
-                    <h4 class="text-md font-medium text-gray-800 mb-2">${category}</h4>
-                    <div class="flex flex-wrap gap-2">
-                        ${skillList.map(skill => `
-                            <label class="inline-flex items-center bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1 text-sm font-medium text-gray-700 cursor-pointer">
-                                <input type="checkbox" 
-                                       class="form-checkbox h-4 w-4 text-blue-600 rounded mr-2 skill-checkbox"
-                                       data-skill='${JSON.stringify(skill).replace(/'/g, '&#39;')}'
-                                       checked>
-                                ${skill.name || skill.skill_name}
-                            </label>
-                        `).join('')}
-                    </div>
-                `;
-                skillsByCategory.appendChild(categoryElement);
-            });
-        }
-        
-        // 結果セクションを表示
-        document.getElementById('resultSection').classList.remove('hidden');
-        document.getElementById('resultSection').scrollIntoView({ behavior: 'smooth' });
-        
-    } catch (error) {
-        console.error('スキル表示中にエラーが発生しました:', error);
-        showError('エラー', 'スキルの表示中にエラーが発生しました', error.message);
-    }
-}
 
 // ファイルアップロードを処理する関数
 async function handleFileUpload(event) {
@@ -1744,3 +1556,30 @@ document.addEventListener('DOMContentLoaded', function() {
     initProjectSearch();
     initializeApp();
 });
+
+// Global modal functions
+window.viewProjectDetails = function(projectId) {
+    if (!projectId) return;
+    // Check both global arrays (topPageProjects from main.js, allProjects from projects.html)
+    const projectList = window.topPageProjects || (typeof allProjects !== 'undefined' ? allProjects : []);
+    const project = projectList.find(p => p.id == projectId);
+    if (project) {
+        const titleEl = document.getElementById('modal-title');
+        if (titleEl) titleEl.textContent = project.title || project.name || '�Č��ڍ�';
+        
+        const contentEl = document.getElementById('modal-content');
+        if (contentEl) {
+            const content = project.email_body || project.description || '�ڍ׏�񂪂���܂���B';
+            contentEl.textContent = content;
+        }
+        
+        const modal = document.getElementById('projectModal');
+        if (modal) modal.classList.remove('hidden');
+    }
+};
+
+window.closeProjectModal = function() {
+    const modal = document.getElementById('projectModal');
+    if (modal) modal.classList.add('hidden');
+};
+

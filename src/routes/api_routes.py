@@ -106,11 +106,29 @@ def upload_file():
         # LLMでのスキル解析
         skills_dict = skill_extractor.extract_skills(text)
         
+        flat_skills = []
+        if isinstance(skills_dict, dict):
+            for category, sk_list in skills_dict.items():
+                for sk in sk_list:
+                    if isinstance(sk, dict):
+                        sk_copy = sk.copy()
+                        sk_copy['category'] = category
+                        flat_skills.append(sk_copy)
+                    elif isinstance(sk, str):
+                        flat_skills.append({'skill': sk, 'category': category})
+        else:
+            flat_skills = skills_dict if isinstance(skills_dict, list) else []
+            
+        # 自動的にセッションに保存（engineer_id=1として）
+        session_key = 'engineer_skills_1'
+        session[session_key] = flat_skills
+        
         # 自由記述からスキル解析する既存の互換機能
         return jsonify({
+            'status': 'success',
             'success': True,
             'message': '解析が完了しました',
-            'skills': skills_dict
+            'skills': flat_skills
         })
 
     except Exception as e:

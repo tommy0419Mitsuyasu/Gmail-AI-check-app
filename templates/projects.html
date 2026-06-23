@@ -192,6 +192,7 @@
     </div>
 </div>
 
+
 <script>
 // グローバル変数としてプロジェクトデータとフィルター状態を保持
 let allProjects = [];
@@ -520,9 +521,33 @@ function fetchProjects() {
                     skills = data.skills;
                     console.log('APIからスキルを取得しました:', skills);
                 } else {
-                    // APIにスキルがなければLocalStorage/SessionStorageから試みる
-                    const skillsStr = localStorage.getItem('engineer_skills') || sessionStorage.getItem('extractedSkills');
-                    skills = skillsStr ? JSON.parse(skillsStr) : [];
+                    // APIにスキルがなければLocalStorage/SessionStorageから試みる (sessionStorageを優先)
+                    const skillsStr = sessionStorage.getItem('extractedSkills') || localStorage.getItem('engineer_skills');
+                    let parsedSkills = skillsStr ? JSON.parse(skillsStr) : [];
+                    
+                    // 古い形式（辞書型）のデータが残っている場合の配列化処理
+                    if (parsedSkills && typeof parsedSkills === 'object' && !Array.isArray(parsedSkills)) {
+                        let flatArray = [];
+                        for (let key in parsedSkills) {
+                            if (Array.isArray(parsedSkills[key])) {
+                                parsedSkills[key].forEach(sk => {
+                                    if (typeof sk === 'object') {
+                                        if (!sk.category) sk.category = key;
+                                        flatArray.push(sk);
+                                    } else if (typeof sk === 'string') {
+                                        flatArray.push({skill: sk, category: key});
+                                    }
+                                });
+                            } else if (typeof parsedSkills[key] === 'string') {
+                                flatArray.push({skill: parsedSkills[key], category: 'その他'});
+                            }
+                        }
+                        skills = flatArray;
+                    } else if (Array.isArray(parsedSkills)) {
+                        skills = parsedSkills;
+                    } else {
+                        skills = [];
+                    }
                     console.log('ストレージからスキルを取得しました:', skills);
                 }
                 
@@ -754,13 +779,12 @@ function displayProjects(projects) {
                             <span>勤務地: ${escapeHtml(location)}</span>
                         </div>
                         <div class="flex space-x-2 w-full sm:w-auto">
-                            <a href="${escapeHtml(project.gmail_url || 'https://mail.google.com/mail/u/0/#inbox')}" 
-                               target="_blank"
-                               rel="noopener noreferrer"
-                               class="w-full sm:w-auto px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 text-center inline-flex items-center justify-center gap-2">
+                            <button type="button" 
+                               class="view-details-btn w-full sm:w-auto px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 text-center inline-flex items-center justify-center gap-2"
+                               data-project-id="${project.id}">
                                 <i class="fas fa-envelope"></i>
                                 詳細を見る
-                            </a>
+                            </button>
 
                         </div>
                     </div>
@@ -790,18 +814,7 @@ function displayProjects(projects) {
  * プロジェクトの詳細を表示する
  * @param {string} projectId - プロジェクトID
  */
-function viewProjectDetails(projectId) {
-    if (!projectId) {
-        showErrorMessage('プロジェクトIDが指定されていません');
-        return;
-    }
-    // モーダルや別ページで詳細を表示する処理を実装
-    // 例: window.location.href = `/projects/${projectId}`;
-    const project = allProjects.find(p => p.id === projectId);
-    if (project) {
-        openGmailWithProject(project);
-    }
-}
+
 
 /**
  * スキルを追加する
