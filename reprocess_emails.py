@@ -21,29 +21,30 @@ logging.basicConfig(
 # 環境変数ロード
 load_dotenv()
 
-def get_all_emails() -> List[Dict[str, Any]]:
-    """DBから全てのメールを取得する"""
+def get_all_emails(limit=1000) -> List[Dict[str, Any]]:
+    """DBから指定件数のメールを取得する"""
     conn = sqlite3.connect(db_manager.db_path)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     try:
-        c.execute('SELECT message_id, body, subject, received_at FROM emails')
+        # 最新のものから順に取得
+        c.execute('SELECT message_id, body, subject, received_at FROM emails ORDER BY received_at DESC LIMIT ?', (limit,))
         return [dict(row) for row in c.fetchall()]
     finally:
         conn.close()
 
 def clear_project_data(message_id: str):
-    """特定のメッセージIDに関連するプロジェクトとスキル紐付けを削除する"""
+    """このメッセージIDに関連するプロジェクトとスキルを削除する"""
     conn = sqlite3.connect(db_manager.db_path)
     c = conn.cursor()
     try:
-        # プロジェクトIDを取得
+        # プロジェクトID取得
         c.execute('SELECT id FROM projects WHERE email_message_id = ?', (message_id,))
         project_rows = c.fetchall()
         
         for row in project_rows:
             project_id = row[0]
-            # 紐付け削除
+            # 関連スキル削除
             c.execute('DELETE FROM project_skills WHERE project_id = ?', (project_id,))
             # FTS削除
             c.execute('DELETE FROM projects_fts WHERE rowid = ?', (project_id,))
@@ -57,9 +58,9 @@ def clear_project_data(message_id: str):
     finally:
         conn.close()
 
-def reprocess_all():
-    """全メールを再処理する"""
-    emails = get_all_emails()
+def reprocess_all(limit=1000):
+    """すべて再処理"""
+    emails = get_all_emails(limit=limit)
     logging.info(f"Found {len(emails)} emails. Starting reprocessing...")
     
     success_count = 0

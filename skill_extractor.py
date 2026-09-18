@@ -88,66 +88,15 @@ SKILL_CATEGORIES = {
     'other': 'その他'
 }
 
-# 拡張されたスキル辞書
-SKILL_DB = {
-    # プログラミング言語
-    'Python': {
-        'type': 'language',
-        'aliases': ['py', 'python3', 'python2'],
-        'categories': ['backend', 'data-science', 'automation', 'scripting'],
-        'related': ['Django', 'Flask', 'FastAPI', 'pandas', 'numpy', 'scikit-learn']
-    },
-    'JavaScript': {'type': 'language', 'aliases': ['js', 'es6', 'es2015']},
-    'TypeScript': {'type': 'language', 'aliases': ['ts']},
-    'Java': {'type': 'language'},
-    'C#': {'type': 'language', 'aliases': ['csharp']},
-    'C++': {'type': 'language', 'aliases': ['cpp']},
-    'Go': {'type': 'language', 'aliases': ['golang']},
-    'Ruby': {'type': 'language'},
-    'PHP': {'type': 'language'},
-    'Swift': {'type': 'language'},
-    'Kotlin': {'type': 'language'},
-    'Rust': {'type': 'language'},
-    'Scala': {'type': 'language'},
-    'Dart': {'type': 'language'},
-    
-    # フレームワーク
-    'Django': {'type': 'framework', 'category': 'backend'},
-    'Flask': {'type': 'framework', 'category': 'backend'},
-    'FastAPI': {'type': 'framework', 'category': 'backend'},
-    'React': {'type': 'framework', 'category': 'frontend'},
-    'Vue.js': {'type': 'framework', 'category': 'frontend', 'aliases': ['vue']},
-    'Angular': {'type': 'framework', 'category': 'frontend'},
-    'Node.js': {'type': 'framework', 'category': 'backend', 'aliases': ['node']},
-    'Spring': {'type': 'framework', 'category': 'backend'},
-    'Laravel': {'type': 'framework', 'category': 'backend'},
-    'Ruby on Rails': {'type': 'framework', 'category': 'backend', 'aliases': ['rails']},
-    'Express': {'type': 'framework', 'category': 'backend'},
-    'Next.js': {'type': 'framework', 'category': 'frontend', 'aliases': ['next']},
-    'Nuxt.js': {'type': 'framework', 'category': 'frontend', 'aliases': ['nuxt']},
-    
-    # クラウド/インフラ
-    'AWS': {'type': 'cloud', 'category': 'infrastructure'},
-    'Azure': {'type': 'cloud', 'category': 'infrastructure'},
-    'GCP': {'type': 'cloud', 'category': 'infrastructure', 'aliases': ['Google Cloud']},
-    'Docker': {'type': 'devops', 'category': 'container'},
-    'Kubernetes': {'type': 'devops', 'category': 'container', 'aliases': ['k8s']},
-    'Terraform': {'type': 'devops', 'category': 'iac'},
-    'Ansible': {'type': 'devops', 'category': 'configuration'},
-    'Jenkins': {'type': 'devops', 'category': 'ci_cd'},
-    'GitHub Actions': {'type': 'devops', 'category': 'ci_cd'},
-    'GitLab CI/CD': {'type': 'devops', 'category': 'ci_cd'},
-    
-    # データベース
-    'MySQL': {'type': 'database', 'category': 'relational'},
-    'PostgreSQL': {'type': 'database', 'category': 'relational', 'aliases': ['postgres']},
-    'MongoDB': {'type': 'database', 'category': 'nosql'},
-    'Redis': {'type': 'database', 'category': 'key-value'},
-    'Elasticsearch': {'type': 'database', 'category': 'search'},
-    'Oracle': {'type': 'database', 'category': 'relational'},
-    'SQL Server': {'type': 'database', 'category': 'relational'},
-    'SQLite': {'type': 'database', 'category': 'relational'},
-}
+import sys
+import os
+# Add current dir to sys.path if needed, or simply import from config
+try:
+    from config.skills_db import EXTENDED_SKILL_DB as SKILL_DB
+except ImportError:
+    # Fallback in case of import issues during testing
+    SKILL_DB = {}
+
 
 # エイリアスの逆引き辞書を作成
 ALIAS_MAP = {}
@@ -316,7 +265,7 @@ class SkillExtractor:
         # 信頼度を0.1〜1.0の範囲に収める
         return max(0.1, min(1.0, confidence))
         
-    def extract_candidate_skills(self, text: str, min_confidence: float = 0.6):
+    def extract_candidate_skills(self, text: str, min_confidence: float = 0.4):
         """
         テキストからスキル候補を抽出（コンテキスト付き）
         
@@ -851,7 +800,7 @@ class SkillExtractor:
         return {k: v for k, v in categories.items() if v}
         
 
-    def extract_skills(self, text: str, min_confidence: float = 0.6, use_rezume: bool = True) -> Dict[str, List[Dict]]:
+    def extract_skills(self, text: str, min_confidence: float = 0.4, use_rezume: bool = True) -> Dict[str, List[Dict]]:
         """
         テキストからスキルを抽出し、カテゴリ別に分類して返す
         

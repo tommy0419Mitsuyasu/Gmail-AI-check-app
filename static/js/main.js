@@ -295,6 +295,9 @@ function initDragAndDrop() {
                                 // 結果セクションを表示
                                 if (elements.resultSection) {
                                     elements.resultSection.classList.remove('hidden');
+            sessionStorage.setItem('extractedSkills', JSON.stringify(result.skills));
+            if (result.extracted_text) sessionStorage.setItem('extractedText', result.extracted_text);
+
                                     elements.resultSection.scrollIntoView({ behavior: 'smooth' });
                                 }
                                 
@@ -487,6 +490,9 @@ function showResults(skills, extractedText) {
     // 結果セクションを表示
     if (elements.resultSection) {
         elements.resultSection.classList.remove('hidden');
+            sessionStorage.setItem('extractedSkills', JSON.stringify(result.skills));
+            if (result.extracted_text) sessionStorage.setItem('extractedText', result.extracted_text);
+
         // 結果セクションまでスクロール
         elements.resultSection.scrollIntoView({ behavior: 'smooth' });
     }

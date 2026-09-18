@@ -5,6 +5,12 @@ from difflib import SequenceMatcher
 from collections import defaultdict
 from vector_engine import vector_engine
 
+try:
+    from config.skills_db import EXTENDED_SKILL_DB as SKILL_DB
+except ImportError:
+    SKILL_DB = {}
+
+
 # ドメインとスキルの関連性を定義
 DOMAIN_SKILLS = {
     'java_backend': ['java', 'spring', 'spring boot', 'hibernate', 'jpa', 'junit', 'maven', 'gradle'],
@@ -743,22 +749,14 @@ def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: L
     # マッチング結果をスコアの高い順にソート
     matches.sort(key=lambda x: x['score'], reverse=True)
     
-    # マッチしなかった要件を特定
+    # マッチしなかった要件を特定（カテゴリフォールバック前に一旦記録）
     missed_skills = []
-    missing_must_count = 0
-    
     for req in project_requirements:
         req_name = req.get('skill', req.get('name', ''))
         if not req_name:
             continue
-            
-        req_type = str(req.get('type', '')).lower()
-        is_must = req_type in ['must', 'required'] or str(req.get('is_required', '')).lower() == 'true'
-        
         if normalize_skill(req_name) not in matched_skills:
             missed_skills.append(req_name)
-            if is_must:
-                missing_must_count += 1
     
     # ① カテゴリベースのフォールバックマッチング
     def _get_skill_category(skill_name: str) -> str:
@@ -788,6 +786,9 @@ def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: L
                 total_score += partial_score
                 matched_skills.add(req_norm)
                 category_bonus_used.add(req_norm)
+                # カテゴリフォールバックで救済されたのでmissed_skillsから削除
+                if req_skill in missed_skills:
+                    missed_skills.remove(req_skill)
                 matches.append({
                     'required_skill': req_skill,
                     'matched_skill': f"{original_skill_names.get(cand_skill, cand_skill)} (カテゴリ: {req_cat})",
@@ -808,9 +809,48 @@ def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: L
             domain_bonus = min(len(common_domains) * 0.05, 0.15)
             final_score = min(final_score + domain_bonus, 1.0)
     
-    # ④ 【ペナルティ1】必須(must)スキルが欠けている場合の軽微な減点（緩和済み）
-    if missing_must_count > 0:
-        final_score *= (0.6 ** missing_must_count)
+    # ④ 【ペナルティ1】必須(must)スキルが欠けている場合のペナルティ計算（ソフトスキル免除、類似緩和）
+    penalty_multiplier = 1.0
+    for req in project_requirements:
+        req_name = req.get('skill', req.get('name', ''))
+        if not req_name:
+            continue
+            
+        req_type = str(req.get('type', '')).lower()
+        is_must = req_type in ['must', 'required'] or str(req.get('is_required', '')).lower() == 'true'
+        
+        if is_must:
+            # ソフトスキルかどうか判定
+            skill_info = SKILL_DB.get(req_name, SKILL_DB.get(req_name.title(), SKILL_DB.get(req_name.upper(), {})))
+            if not skill_info:
+                for sk_key, sk_data in SKILL_DB.items():
+                    if sk_key.lower() == req_name.lower() or req_name.lower() in [a.lower() for a in sk_data.get('aliases', [])]:
+                        skill_info = sk_data
+                        break
+            
+            is_soft = skill_info.get('type') == 'soft'
+            
+            if is_soft:
+                continue # ソフトスキルの場合はペナルティなし
+                
+            req_norm = normalize_skill(req_name)
+            if req_norm not in matched_skills:
+                # 完全に欠けている場合
+                if skill_info.get('type') in ['language', 'framework']:
+                    # 言語やフレームワークが必須なのに無い場合は致命的
+                    penalty_multiplier *= 0.0
+                else:
+                    penalty_multiplier *= 0.6
+            else:
+                # マッチしているが、マッチタイプを確認
+                match_records = [m for m in matches if m['required_skill'] == req_name]
+                if match_records:
+                    best_match_type = match_records[0].get('match_type', 'exact')
+                    if best_match_type != 'exact':
+                        # 類似・関連・カテゴリでのマッチの場合：20%減点に緩和
+                        penalty_multiplier *= 0.8
+
+    final_score *= penalty_multiplier
     
     # ⑤ 【ペナルティ2】候補者と案件のメインドメインが不一致の場合の軽微な減点
     top_candidate_domain = max(candidate_domains.items(), key=lambda x: x[1])[0] if candidate_domains else None

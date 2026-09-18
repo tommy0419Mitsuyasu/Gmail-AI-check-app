@@ -81,7 +81,7 @@ class BatchProcessor:
             logging.error(f"Authentication failed: {e}")
             self.service = None
 
-    def fetch_and_process_emails(self, days_ck: int = 14, max_results: int = 10000):
+    def fetch_and_process_emails(self, days_ck: int = 14, max_results: int = 1000):
         """
         メールを取得して処理する
         
@@ -191,20 +191,27 @@ class BatchProcessor:
                 logging.debug(f"Message {message_id} already exists. Skipping analysis.")
                 return
 
-            # 解析（AIまたは従来手法による一括抽出）
-            extracted_data = skill_extractor.extract_all(body)
+            # 抽出（AIまたは正規表現によるフォールバック）
+            try:
+                extracted_data = skill_extractor.extract_all(body)
+            except Exception as e:
+                logging.warning(f"Extraction failed for {message_id}: {e}")
+                extracted_data = {}
             
+            if not extracted_data:
+                extracted_data = {}
+
             # 人材情報（スキルシート）の場合はスキップ
             if extracted_data.get('type') == 'engineer':
                 logging.info(f"Skipping resume/engineer data: {extracted_data.get('title')}")
                 return
 
-            # スキル情報を分離
+            # スキルを分離
             skills_list = extracted_data.pop('skills', [])
             
-            # 案件情報の補正
+            # 案件名の補正
             project_info = extracted_data
-            if not project_info.get('title') or project_info['title'] == '案件名なし':
+            if not project_info.get('title') or project_info['title'] == '案件なし':
                  project_info['title'] = subject
 
             # DBへ案件保存
@@ -215,20 +222,40 @@ class BatchProcessor:
             logging.error(f"Failed to process message {message_id}: {e}", exc_info=True)
 
     def _get_email_body(self, payload: Dict) -> str:
-        """メールペイロードから本文を抽出する（再帰的）"""
+        """メールの本文を抽出（再帰的）し、マルチパートやHTMLにも対応"""
+        import base64
+        try:
+            from bs4 import BeautifulSoup
+        except ImportError:
+            BeautifulSoup = None
+
         body = ""
-        if 'parts' in payload:
-            for part in payload['parts']:
-                if part['mimeType'] == 'text/plain':
-                    data = part['body'].get('data')
-                    if data:
-                         body += base64.urlsafe_b64decode(data).decode('utf-8')
-                elif part['mimeType'] == 'multipart/alternative':
-                    body += self._get_email_body(part)
-        elif payload['mimeType'] == 'text/plain':
-             data = payload['body'].get('data')
-             if data:
-                 body = base64.urlsafe_b64decode(data).decode('utf-8')
+        parts = payload.get('parts', [payload]) if 'parts' in payload else [payload]
+        
+        for part in parts:
+            mime_type = part.get('mimeType', '')
+            if mime_type == 'text/plain':
+                data = part.get('body', {}).get('data')
+                if data:
+                    try:
+                        body += base64.urlsafe_b64decode(data).decode('utf-8')
+                    except UnicodeDecodeError:
+                        body += base64.urlsafe_b64decode(data).decode('cp932', errors='ignore')
+            elif mime_type == 'text/html':
+                data = part.get('body', {}).get('data')
+                if data:
+                    try:
+                        html = base64.urlsafe_b64decode(data).decode('utf-8')
+                    except UnicodeDecodeError:
+                        html = base64.urlsafe_b64decode(data).decode('cp932', errors='ignore')
+                    if BeautifulSoup:
+                        body += BeautifulSoup(html, 'html.parser').get_text(separator='\n')
+                    else:
+                        import re
+                        body += re.sub('<[^<]+?>', '\n', html)
+            elif mime_type.startswith('multipart/'):
+                body += self._get_email_body(part)
+                
         return body
 
 if __name__ == "__main__":

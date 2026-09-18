@@ -128,8 +128,10 @@ def upload_file():
             'status': 'success',
             'success': True,
             'message': '解析が完了しました',
-            'skills': flat_skills
+            'skills': flat_skills,
+            'extracted_text': text
         })
+
 
     except Exception as e:
         logger.error(f"ファイル処理中にエラーが発生しました: {e}", exc_info=True)
@@ -185,9 +187,9 @@ def match_projects():
             match_result = enhance_skill_matching(formatted_reqs, candidate_skills)
             score = match_result.get('match_ratio', 0.0)
             
-            # スコアが少しでもあればリストに追加（または最低要件をクリアしたもの）
-            if score > 0:
-                proj_dict['match_percentage'] = score
+            # スコアが一定以上のみリストに追加
+            if score > 0.1:
+                proj_dict['match_percentage'] = score * 100
                 proj_dict['match_details'] = match_result
                 scored_projects.append(proj_dict)
 
