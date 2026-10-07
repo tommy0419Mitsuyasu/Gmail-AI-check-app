@@ -156,49 +156,40 @@ def match_projects():
         if not skills:
             return jsonify({'success': False, 'message': 'スキルが指定されていません'}), 400
 
-        # JavaScriptからは文字列またはオブジェクト({'name':'...'})の配列が送られてくる
-        candidate_skills = []
-        for s in skills:
-            if isinstance(s, dict):
-                candidate_skills.append(s)
-            elif isinstance(s, str):
-                candidate_skills.append({'name': s, 'level': '中級'})
+        from matching_engine import get_engine
+        engine = get_engine()
+        
+        # 新しいマッチングエンジンでスコアリング（過去60日分、スコア20%以上）
+        result = engine.match(raw_skills=skills, days=60, limit=100, min_score=20.0)
+        
+        # APIレスポンス用にマッピング
+        formatted_matches = []
+        for match in result['matches']:
+            # フロントエンド（main.js）が期待するプロパティ名にマッピング
+            formatted_match = {
+                'id': match['id'],
+                'message_id': match['message_id'],
+                'title': match['title'],
+                'subject': match['subject'],
+                'sender': match['sender'],
+                'created_at': match['received_at'],
+                'salary': match['price_text'],
+                'location': match['location'],
+                'match_percentage': match['match_percentage'],
+                'required_skills': match['required_skills'],
+                'must_skills': match['must_skills'],
+                'matched_skills': match['matched_skills'],
+                # detailed match info
+                'match_details': match['match_details'],
+                'reasons': match['reasons'],
+                'description': '【AI解析によるマッチング理由】\n' + '\n'.join('・' + r for r in match['reasons']),
+                'gmail_url': match['gmail_url']
+            }
+            formatted_matches.append(formatted_match)
 
-        # db_managerを使用して最大2000件程度の案件を取得
-        projects = db_manager.search_projects(limit=2000)
-        
-        from skill_matcher_enhanced import enhance_skill_matching
-        
-        scored_projects = []
-        for proj in projects:
-            proj_dict = dict(proj) # sqlite3.Rowから変換
-            
-            # APIの入力形式（{'skill': '名', 'type': 'must'}）へ案件の要求スキルを変換
-            formatted_reqs = []
-            for r in proj_dict.get('skills', []):
-                if isinstance(r, dict):
-                    formatted_reqs.append({
-                        'skill': r.get('name', ''),
-                        'type': r.get('type', 'want'),
-                        'weight': 1.0
-                    })
-            
-            # 作成した高精度マッチングエンジンでスコアを計算
-            match_result = enhance_skill_matching(formatted_reqs, candidate_skills)
-            score = match_result.get('match_ratio', 0.0)
-            
-            # スコアが一定以上のみリストに追加
-            if score > 0.1:
-                proj_dict['match_percentage'] = score * 100
-                proj_dict['match_details'] = match_result
-                scored_projects.append(proj_dict)
-
-        # マッチ度の高い順に降順ソート
-        scored_projects.sort(key=lambda x: x.get('match_percentage', 0), reverse=True)
-        
         return jsonify({
             'status': 'success',
-            'matches': scored_projects[:100] # トップ100件を返す
+            'matches': formatted_matches
         })
     except Exception as e:
         logger.error(f"案件マッチング中にエラーが発生しました: {e}", exc_info=True)
@@ -269,3 +260,33 @@ def get_engineer_skills(engineer_id):
     except Exception as e:
         logger.error(f"スキル取得中にエラーが発生しました: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@api_bp.route('/api/feedback', methods=['POST'])
+def save_feedback():
+    """マッチングのフィードバックを保存するAPI"""
+    try:
+        import json
+        data = request.json
+        project_id = data.get('project_id')
+        is_good = data.get('is_good')
+        candidate_skills = data.get('candidate_skills', [])
+        comment = data.get('comment', '')
+        
+        if not project_id or is_good is None:
+            return jsonify({'success': False, 'message': '必須パラメータが不足しています'}), 400
+            
+        success = db_manager.save_feedback(
+            project_id=project_id,
+            candidate_skills=json.dumps(candidate_skills, ensure_ascii=False),
+            is_good=is_good,
+            comment=comment
+        )
+        
+        if success:
+            return jsonify({'success': True, 'message': 'フィードバックを保存しました'})
+        else:
+            return jsonify({'success': False, 'message': '保存に失敗しました'}), 500
+            
+    except Exception as e:
+        logger.error(f"フィードバック保存中にエラーが発生しました: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500

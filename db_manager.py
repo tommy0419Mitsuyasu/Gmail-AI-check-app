@@ -49,7 +49,9 @@ class DBManager:
                 received_at DATETIME,
                 body TEXT,
                 processed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                raw_data TEXT  -- JSON形式でメタデータを保存
+                raw_data TEXT,  -- 今後は使用しないが既存データ互換のため残す
+                status TEXT DEFAULT 'pending',
+                simhash_val TEXT
             )
             ''')
 
@@ -75,6 +77,9 @@ class DBManager:
                 location TEXT,
                 commercial_flow TEXT,
                 remote_type TEXT,  -- フルリモート/週3リモートなど
+                
+                -- ベクトル検索用
+                embedding BLOB,
                 
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (email_message_id) REFERENCES emails(message_id)
@@ -103,16 +108,29 @@ class DBManager:
             ''')
 
             # 5. FTS5 仮想テーブル（全文検索用）
-            # 独立したテーブルとして定義し、アプリ側で同期を行う
-            cursor.execute('''
-            CREATE VIRTUAL TABLE IF NOT EXISTS projects_fts USING fts5(
-                title, 
-                description, 
-                location, 
-                commercial_flow,
-                skills_text
-            )
-            ''')
+            cursor.execute("SELECT sql FROM sqlite_master WHERE name = 'projects_fts'")
+            row = cursor.fetchone()
+            if not row or 'trigram' not in row[0].lower():
+                if row:
+                    cursor.execute('DROP TABLE projects_fts')
+                cursor.execute('''
+                CREATE VIRTUAL TABLE projects_fts USING fts5(
+                    title, 
+                    description, 
+                    location, 
+                    commercial_flow,
+                    skills_text,
+                    tokenize='trigram'
+                )
+                ''')
+                # 既存データの移行（すでにテーブルがあった場合）
+                if row:
+                    cursor.execute('''
+                    INSERT INTO projects_fts(rowid, title, description, location, commercial_flow, skills_text)
+                    SELECT p.id, p.title, p.description, p.location, p.commercial_flow, 
+                           (SELECT GROUP_CONCAT(s.name, ' ') FROM project_skills ps JOIN skills s ON ps.skill_id = s.id WHERE ps.project_id = p.id)
+                    FROM projects p
+                    ''')
             
             # トリガーは削除（アプリ側で制御するため）
             # 既存のトリガーがあれば削除
@@ -120,9 +138,46 @@ class DBManager:
             cursor.execute('DROP TRIGGER IF EXISTS projects_ad')
             cursor.execute('DROP TRIGGER IF EXISTS projects_au')
 
+            # 6. フィードバック用テーブル
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS match_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER,
+                candidate_skills TEXT, -- 検索時のスキルリスト(JSON)
+                is_good BOOLEAN, -- 良いマッチか悪いマッチか
+                comment TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects(id)
+            )
+            ''')
+
             # インデックスの作成
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_projects_email ON projects(email_message_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_project_skills_skill ON project_skills(skill_id)')
+
+            # 既存DBへの embedding カラム追加
+            try:
+                cursor.execute("ALTER TABLE projects ADD COLUMN embedding BLOB")
+            except sqlite3.OperationalError:
+                pass
+                
+            # 既存DB用のカラム追加処理（既に存在する場合はエラーになるため無視）
+            try:
+                cursor.execute("ALTER TABLE emails ADD COLUMN status TEXT DEFAULT 'pending'")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute("ALTER TABLE emails ADD COLUMN simhash_val TEXT")
+            except sqlite3.OperationalError:
+                pass
+
+            # 同期状態管理テーブル
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sync_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+            ''')
 
             conn.commit()
             logging.info("Database initialized successfully.")
@@ -135,15 +190,21 @@ class DBManager:
             conn.close()
 
     def save_email(self, message_id: str, subject: str, sender: str, 
-                  received_at: str, body: str, raw_data: Dict = None) -> bool:
+                  received_at: str, body: str, raw_data: Dict = None,
+                  status: str = 'pending', simhash_val: str = None) -> bool:
         """メール原文を保存する"""
         conn = self._get_connection()
         try:
-            conn.execute('''
-            INSERT OR IGNORE INTO emails (message_id, subject, sender, received_at, body, raw_data)
-            VALUES (?, ?, ?, ?, ?, ?)
+            cursor = conn.cursor()
+            cursor.execute('SELECT 1 FROM emails WHERE message_id = ?', (message_id,))
+            if cursor.fetchone():
+                return False
+
+            cursor.execute('''
+            INSERT INTO emails (message_id, subject, sender, received_at, body, raw_data, status, simhash_val)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (message_id, subject, sender, received_at, body, 
-                  json.dumps(raw_data) if raw_data else None))
+                  json.dumps(raw_data) if raw_data else None, status, simhash_val))
             conn.commit()
             return True
         except sqlite3.Error as e:
@@ -152,7 +213,59 @@ class DBManager:
         finally:
             conn.close()
 
-    def save_project(self, email_message_id: str, project_data: Dict, skills: List[Dict]) -> int:
+    def get_sync_state(self, key: str) -> str:
+        """同期状態（historyIdなど）を取得する"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT value FROM sync_state WHERE key = ?', (key,))
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def set_sync_state(self, key: str, value: str):
+        """同期状態を保存する"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)', (key, str(value)))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_email_status(self, message_id: str) -> str:
+        """メールの処理状態を取得する"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT status FROM emails WHERE message_id = ?', (message_id,))
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def update_email_status(self, message_id: str, status: str):
+        """メールの処理状態を更新する"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE emails SET status = ? WHERE message_id = ?', (status, message_id))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_existing_simhashes(self) -> List[str]:
+        """重複判定用に既存のSimHash一覧を取得する（直近10000件程度）"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT simhash_val FROM emails WHERE simhash_val IS NOT NULL ORDER BY received_at DESC LIMIT 10000')
+            return [row[0] for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def save_project(self, email_message_id: str, project_data: Dict, skills: List[Dict], embedding: bytes = None) -> int:
         """
         抽出された案件情報を保存する
         
@@ -160,6 +273,7 @@ class DBManager:
             email_message_id: 元メールのID
             project_data: 案件情報の辞書 (title, description, min_price...)
             skills: スキルリスト [{'name': 'Java', 'type': 'must'}, ...]
+            embedding: 計算済みのベクトルデータ（bytes形式、オプション）
             
         Returns:
             int: 作成されたProject ID
@@ -174,8 +288,9 @@ class DBManager:
                 email_message_id, title, description, 
                 min_price, max_price, price_text,
                 min_hours, max_hours,
-                location, commercial_flow, remote_type
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                location, commercial_flow, remote_type,
+                embedding
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 email_message_id,
                 project_data.get('title'),
@@ -187,7 +302,8 @@ class DBManager:
                 project_data.get('max_hours'),
                 project_data.get('location'),
                 project_data.get('commercial_flow'),
-                project_data.get('remote_type')
+                project_data.get('remote_type'),
+                embedding
             ))
             
             project_id = cursor.lastrowid
@@ -342,6 +458,120 @@ class DBManager:
         except sqlite3.Error as e:
             logging.error(f"Search failed: {e}")
             return []
+        finally:
+            conn.close()
+
+    def search_projects_hybrid(self, query_text: str, query_embedding, limit: int = 300, min_price: int = None, max_price: int = None, remote_only: bool = False, date_threshold: str = None) -> List[Dict]:
+        """BM25とベクトル類似度のハイブリッド検索を行う"""
+        conn = self._get_connection()
+        conn.row_factory = sqlite3.Row
+        try:
+            where_clauses = []
+            params = []
+            
+            # ハードフィルタ
+            if min_price:
+                where_clauses.append("((p.min_price IS NOT NULL AND p.min_price >= ?) OR (p.min_price IS NULL AND p.max_price >= ?))")
+                params.extend([min_price, min_price])
+            if max_price:
+                where_clauses.append("((p.max_price IS NOT NULL AND p.max_price <= ?) OR (p.max_price IS NULL AND p.min_price <= ?))")
+                params.extend([max_price, max_price])
+            if remote_only:
+                where_clauses.append("(p.remote_type LIKE '%リモート%')")
+            if date_threshold:
+                where_clauses.append("e.received_at >= ?")
+                params.append(date_threshold)
+                
+            fts_match = ""
+            if query_text:
+                safe_query = " OR ".join([f'"{q}"' for q in query_text.split() if q.strip()])
+                if safe_query:
+                    fts_match = f"projects_fts MATCH '{safe_query}'"
+
+            base_sql = """
+            SELECT p.id, p.title, p.description, p.min_price, p.max_price, 
+                   p.location, p.commercial_flow, p.remote_type, p.embedding,
+                   e.received_at, e.subject, e.sender, e.message_id
+            FROM projects p
+            JOIN emails e ON p.email_message_id = e.message_id
+            """
+            
+            if fts_match:
+                base_sql += f" JOIN projects_fts fts ON p.id = fts.rowid WHERE {fts_match}"
+                if where_clauses:
+                    base_sql += " AND " + " AND ".join(where_clauses)
+            else:
+                if where_clauses:
+                    base_sql += " WHERE " + " AND ".join(where_clauses)
+                    
+            base_sql += " ORDER BY e.received_at DESC LIMIT 10000"
+            
+            cursor = conn.execute(base_sql, params)
+            
+            results = []
+            import numpy as np
+            from vector_engine import vector_engine
+            
+            for row in cursor:
+                row_dict = dict(row)
+                row_dict['skills'] = []
+                emb_bytes = row_dict.pop('embedding', None)
+                
+                similarity = 0.0
+                if emb_bytes and query_embedding is not None and len(query_embedding) > 0:
+                    proj_emb = np.frombuffer(emb_bytes, dtype=np.float32)
+                    similarity = vector_engine.calculate_similarity(query_embedding, proj_emb)
+                    
+                row_dict['vector_score'] = similarity
+                results.append(row_dict)
+                
+            results.sort(key=lambda x: x['vector_score'], reverse=True)
+            top_results = results[:limit]
+            
+            if top_results:
+                project_ids = [r['id'] for r in top_results]
+                placeholders = ','.join('?' * len(project_ids))
+                skill_cursor = conn.execute(f'''
+                SELECT ps.project_id, s.name, ps.type 
+                FROM skills s 
+                JOIN project_skills ps ON s.id = ps.skill_id 
+                WHERE ps.project_id IN ({placeholders})
+                ''', project_ids)
+                
+                skills_by_project = {}
+                for s in skill_cursor.fetchall():
+                    pid = s['project_id']
+                    if pid not in skills_by_project:
+                        skills_by_project[pid] = []
+                    skills_by_project[pid].append({'name': s['name'], 'type': s['type']})
+                    
+                for row_dict in top_results:
+                    row_dict['skills'] = skills_by_project.get(row_dict['id'], [])
+                    
+            return top_results
+            
+        except sqlite3.Error as e:
+            import logging
+            logging.error(f"Hybrid search failed: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def save_feedback(self, project_id: int, candidate_skills: str, is_good: bool, comment: str = None) -> bool:
+        """マッチング結果に対するフィードバックを保存する"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+            INSERT INTO match_feedback (project_id, candidate_skills, is_good, comment)
+            VALUES (?, ?, ?, ?)
+            ''', (project_id, candidate_skills, is_good, comment))
+            conn.commit()
+            return True
+        except sqlite3.Error as e:
+            import logging
+            logging.error(f"Failed to save feedback: {e}")
+            return False
         finally:
             conn.close()
 

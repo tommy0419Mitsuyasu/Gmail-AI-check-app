@@ -44,7 +44,7 @@ def add_security_headers(response):
     # PDFとWordのダウンロードを許可するためのCSP
     csp = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://code.jquery.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://cdn.tailwindcss.com https://unpkg.com; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://code.jquery.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://cdn.tailwindcss.com https://unpkg.com; "
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
         "font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com; "
         "img-src 'self' data: https:; "
@@ -70,6 +70,36 @@ def initialize_app():
     # データベースフォルダが存在するか確認
     os.makedirs(os.path.join(BASE_DIR, 'db'), exist_ok=True)
 
+
+import threading
+import time
+
+def start_batch_scheduler():
+    from batch_processor import BatchProcessor
+    
+    def run_batch_job():
+        # 起動直後は30秒待機してから初回実行する
+        time.sleep(30)
+        while True:
+            try:
+                logger.info("定期バッチ（メール取得処理）を開始します...")
+                processor = BatchProcessor()
+                # 最新2日分、最大10000件のメールを取得して解析
+                processor.fetch_and_process_emails(days_ck=2, max_results=10000)
+                logger.info("定期バッチが正常に完了しました。")
+            except Exception as e:
+                logger.error(f"定期バッチの実行中にエラーが発生しました: {e}", exc_info=True)
+            
+            # 1時間に1回（3600秒）実行
+            time.sleep(3600)
+            
+    # Werkzeugの再起動ループでスレッドが二重起動するのを防ぐ
+    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not app.debug:
+        thread = threading.Thread(target=run_batch_job, daemon=True)
+        thread.start()
+        logger.info("バックグラウンドの定期バッチスケジューラーが起動しました。")
+
 if __name__ == '__main__':
+    start_batch_scheduler()
     initialize_app()
     app.run(debug=True, port=5000)

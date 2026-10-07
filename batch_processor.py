@@ -16,6 +16,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from db_manager import db_manager
 from skill_extractor import skill_extractor
+from vector_engine import vector_engine
+import numpy as np
 
 # ロギング設定
 logging.basicConfig(
@@ -93,86 +95,124 @@ class BatchProcessor:
             logging.error("Service not initialized.")
             return
 
-        # 検索クエリの構築
-        date_threshold = (datetime.utcnow() - timedelta(days=days_ck)).strftime('%Y/%m/%d')
-        # sales@artwize.co.jp 宛て、かつ添付ファイルなし（テキストベースのSES案件メールを想定）
-        query = f'to:sales@artwize.co.jp after:{date_threshold} -has:attachment'
+        # historyIdの取得
+        history_id = db_manager.get_sync_state('historyId')
+        new_message_ids = []
+        next_history_id = None
         
-        logging.info(f"Searching emails with query: {query}")
-
         try:
-            messages = []
-            page_token = None
+            if history_id:
+                logging.info(f"Fetching changes since historyId: {history_id}")
+                try:
+                    page_token = None
+                    while True:
+                        res = self.service.users().history().list(
+                            userId='me', startHistoryId=history_id, pageToken=page_token
+                        ).execute()
+                        next_history_id = res.get('historyId')
+                        for history in res.get('history', []):
+                            for msg_added in history.get('messagesAdded', []):
+                                new_message_ids.append(msg_added['message']['id'])
+                        page_token = res.get('nextPageToken')
+                        if not page_token:
+                            break
+                except Exception as e:
+                    logging.warning(f"History sync failed, falling back to full sync: {e}")
+                    history_id = None
             
-            # ページネーション対応でメールIDリストを取得
-            while len(messages) < max_results:
-                results = self.service.users().messages().list(
-                    userId='me', q=query, maxResults=min(500, max_results - len(messages)), pageToken=page_token
-                ).execute()
-                
-                msgs = results.get('messages', [])
-                if not msgs:
-                    break
+            if not history_id:
+                # 検索クエリの構築（フルシンク）
+                date_threshold = (datetime.utcnow() - timedelta(days=days_ck)).strftime('%Y/%m/%d')
+                query = f'to:sales@artwize.co.jp after:{date_threshold}'  # 添付ファイル制限を撤廃 (-has:attachmentを削除)
+                logging.info(f"Searching emails with query: {query}")
+
+                page_token = None
+                while len(new_message_ids) < max_results:
+                    results = self.service.users().messages().list(
+                        userId='me', q=query, maxResults=min(500, max_results - len(new_message_ids)), pageToken=page_token
+                    ).execute()
                     
-                messages.extend(msgs)
-                
-                page_token = results.get('nextPageToken')
-                if not page_token:
-                    break
+                    msgs = results.get('messages', [])
+                    if not msgs:
+                        break
+                        
+                    new_message_ids.extend([m['id'] for m in msgs])
                     
-            if not messages:
-                logging.info("No messages found.")
+                    page_token = results.get('nextPageToken')
+                    if not page_token:
+                        break
+                        
+                # 最新のhistoryIdを保存する用
+                try:
+                    prof = self.service.users().getProfile(userId='me').execute()
+                    next_history_id = prof.get('historyId')
+                except Exception as e:
+                    logging.error(f"Failed to get profile for historyId: {e}")
+
+            # 重複排除のために一意にする
+            new_message_ids = list(set(new_message_ids))
+            if not new_message_ids:
+                logging.info("No new messages found.")
+                if next_history_id:
+                    db_manager.set_sync_state('historyId', next_history_id)
                 return
 
-            logging.info(f"Found {len(messages)} messages. Checking against DB...")
+            logging.info(f"Found {len(new_message_ids)} messages. Checking against DB...")
 
             # 処理済みチェック
             conn = db_manager._get_connection()
             c = conn.cursor()
-            
-            new_message_ids = []
-            for msg in messages:
-                msg_id = msg['id']
-                c.execute('SELECT 1 FROM emails WHERE message_id = ?', (msg_id,))
-                if not c.fetchone():
-                    new_message_ids.append(msg_id)
-                    
+            unprocessed_ids = []
+            for msg_id in new_message_ids:
+                c.execute("SELECT status FROM emails WHERE message_id = ?", (msg_id,))
+                row = c.fetchone()
+                if not row or row[0] == 'failed':
+                    unprocessed_ids.append(msg_id)
             conn.close()
-            
-            logging.info(f"{len(messages) - len(new_message_ids)} messages already processed. Processing {len(new_message_ids)} new messages...")
 
-            if not new_message_ids:
+            logging.info(f"Processing {len(unprocessed_ids)} new messages...")
+
+            if not unprocessed_ids:
+                if next_history_id:
+                    db_manager.set_sync_state('historyId', next_history_id)
                 return
 
-            # 並列処理 (googleapiclientはスレッドセーフではないため max_workers=1 で逐次処理となる)
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = []
-                for msg_id in new_message_ids:
-                    futures.append(executor.submit(self._process_single_message, msg_id))
-
-                for future in as_completed(futures):
-                    try:
-                        future.result()
-                    except Exception as e:
-                        logging.error(f"Error in processing thread: {e}")
+            # Batch request processing
+            existing_simhashes = set(db_manager.get_existing_simhashes())
+            
+            def process_message_callback(request_id, response, exception):
+                if exception is not None:
+                    logging.error(f"Error fetching message: {exception}")
+                    return
+                self._process_single_message(response, existing_simhashes)
+                
+            batch_size = 50
+            for i in range(0, len(unprocessed_ids), batch_size):
+                batch = self.service.new_batch_http_request(callback=process_message_callback)
+                batch_ids = unprocessed_ids[i:i+batch_size]
+                logging.info(f"Fetching batch {i//batch_size + 1}: {len(batch_ids)} messages")
+                for msg_id in batch_ids:
+                    batch.add(self.service.users().messages().get(userId='me', id=msg_id, format='full'))
+                try:
+                    batch.execute()
+                except Exception as e:
+                    logging.error(f"Batch execution failed: {e}")
+                    
+            # 処理完了後にhistoryIdを更新
+            if next_history_id:
+                db_manager.set_sync_state('historyId', next_history_id)
 
         except Exception as e:
             logging.error(f"Error during fetch: {e}")
 
-    def _process_single_message(self, message_id: str):
-        """1通のメールを詳細取得・解析・保存する"""
+    def _process_single_message(self, msg: Dict, existing_simhashes: set):
+        """1通のメールを詳細解析・保存する"""
+        message_id = msg['id']
         try:
-            # 詳細取得
-            msg = self.service.users().messages().get(
-                userId='me', id=message_id, format='full'
-            ).execute()
-
             # ヘッダー情報の抽出
             headers = {h['name'].lower(): h['value'] for h in msg['payload']['headers']}
             subject = headers.get('subject', 'No Subject')
             sender = headers.get('from', 'Unknown')
-            # Dateヘッダーのパース等は省略（DBには受信時の生文字列を入れるか、datetime変換するか）
-            # ここではシンプルに文字列として扱うが、received_atには現在時刻またはInternalDateを使用する手もある
             internal_date = int(msg['internalDate']) / 1000
             received_at = datetime.fromtimestamp(internal_date).isoformat()
 
@@ -180,46 +220,83 @@ class BatchProcessor:
             body = self._get_email_body(msg['payload'])
             if not body:
                 logging.warning(f"Empty body for message {message_id}")
+                db_manager.save_email(message_id, subject, sender, received_at, "", raw_data=None, status='failed')
                 return
 
-            # DBへメール保存 (重複時はFalseが返る)
-            saved = db_manager.save_email(
-                message_id, subject, sender, received_at, body, raw_data=msg
+            # Simhash計算
+            import re
+            from simhash import Simhash
+            
+            norm_body = re.sub(r'お世話になっております。?.*$', '', body, flags=re.MULTILINE)
+            norm_body = re.sub(r'よろしくお願いいたします。?.*$', '', norm_body, flags=re.MULTILINE)
+            norm_body = re.sub(r'[-_]{4,}', '', norm_body)
+            norm_body = re.sub(r'\s+', '', norm_body)
+            simhash_val = str(Simhash(norm_body).value) if norm_body else ""
+            
+            if simhash_val in existing_simhashes and simhash_val != "":
+                logging.debug(f"Message {message_id} is a duplicate (simhash match).")
+                db_manager.save_email(message_id, subject, sender, received_at, body, raw_data=None, status='done', simhash_val=simhash_val)
+                return
+            
+            existing_simhashes.add(simhash_val)
+
+            # DBへメール保存 (raw_dataは保存しない)
+            db_manager.save_email(
+                message_id, subject, sender, received_at, body, raw_data=None, status='pending', simhash_val=simhash_val
             )
             
-            if not saved:
-                logging.debug(f"Message {message_id} already exists. Skipping analysis.")
-                return
-
             # 抽出（AIまたは正規表現によるフォールバック）
             try:
                 extracted_data = skill_extractor.extract_all(body)
             except Exception as e:
                 logging.warning(f"Extraction failed for {message_id}: {e}")
-                extracted_data = {}
+                db_manager.update_email_status(message_id, 'failed')
+                return
             
             if not extracted_data:
-                extracted_data = {}
+                db_manager.update_email_status(message_id, 'failed')
+                return
 
             # 人材情報（スキルシート）の場合はスキップ
             if extracted_data.get('type') == 'engineer':
-                logging.info(f"Skipping resume/engineer data: {extracted_data.get('title')}")
+                logging.info(f"Skipping resume/engineer data: {message_id}")
+                db_manager.update_email_status(message_id, 'done')
                 return
 
-            # スキルを分離
-            skills_list = extracted_data.pop('skills', [])
+            projects = extracted_data.get('projects', [])
+            if not projects:
+                # 古い形式の互換性用フォールバック
+                skills_list = extracted_data.pop('skills', [])
+                project_info = extracted_data
+                if not project_info.get('title') or project_info['title'] == '案件なし':
+                    project_info['title'] = subject
+                
+                # ベクトル計算
+                proj_text = f"{project_info.get('title', '')}\n{project_info.get('description', '')}\n{' '.join([s.get('name', '') for s in skills_list])}"
+                emb_arr = vector_engine.encode(proj_text)
+                emb_bytes = emb_arr.astype(np.float32).tobytes() if emb_arr.size > 0 else None
+                
+                db_manager.save_project(message_id, project_info, skills_list, embedding=emb_bytes)
+                logging.info(f"Processed 1 project from {message_id}")
+            else:
+                for idx, project_info in enumerate(projects):
+                    skills_list = project_info.pop('skills', [])
+                    if not project_info.get('title') or project_info['title'] == '案件なし':
+                        project_info['title'] = f"{subject} ({idx+1})"
+                        
+                    # ベクトル計算
+                    proj_text = f"{project_info.get('title', '')}\n{project_info.get('description', '')}\n{' '.join([s.get('name', '') for s in skills_list])}"
+                    emb_arr = vector_engine.encode(proj_text)
+                    emb_bytes = emb_arr.astype(np.float32).tobytes() if emb_arr.size > 0 else None
+                    
+                    project_id = db_manager.save_project(message_id, project_info, skills_list, embedding=emb_bytes)
+                    logging.info(f"Processed project {project_id}: {project_info['title']}")
             
-            # 案件名の補正
-            project_info = extracted_data
-            if not project_info.get('title') or project_info['title'] == '案件なし':
-                 project_info['title'] = subject
-
-            # DBへ案件保存
-            project_id = db_manager.save_project(message_id, project_info, skills_list)
-            logging.info(f"Processed project {project_id}: {project_info['title']}")
+            db_manager.update_email_status(message_id, 'done')
 
         except Exception as e:
             logging.error(f"Failed to process message {message_id}: {e}", exc_info=True)
+            db_manager.update_email_status(message_id, 'failed')
 
     def _get_email_body(self, payload: Dict) -> str:
         """メールの本文を抽出（再帰的）し、マルチパートやHTMLにも対応"""

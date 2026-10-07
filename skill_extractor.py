@@ -1028,33 +1028,58 @@ class SkillExtractor:
         return formatted
 
     def extract_all(self, text: str, use_ai: bool = False) -> Dict[str, Any]:
-        """
-        テキストから案件情報とスキル情報を一括抽出する（正規表現・ルールベースのみ）
-        
-        Args:
-            text: 解析対象のテキスト
-            use_ai: 互換性維持のためのパラメータ（現在は使用されません）
+        """テキストから案件情報とスキル情報を一括抽出する（見出しベース・複数案件対応）"""
+        record_type = self._determine_record_type(text)
+        if record_type == 'engineer':
+            return {'type': 'engineer'}
+
+        project_texts = self._split_into_projects(text)
+        projects = []
+
+        for p_text in project_texts:
+            project_info = self.extract_project_info(p_text)
             
-        Returns:
-            Dict: 案件情報とスキル情報の統合辞書
-        """
-        # 既存ロジックの組み合わせ
-        project_info = self.extract_project_info(text)
-        skills_dict = self.extract_skills(text)
+            # スキル形式の変換
+            skills_flat = []
+            for skill in project_info.pop('must_skills', []):
+                skills_flat.append({'name': skill, 'type': 'must'})
+            for skill in project_info.pop('want_skills', []):
+                skills_flat.append({'name': skill, 'type': 'want'})
+            
+            project_info['skills'] = skills_flat
+            projects.append(project_info)
+            
+        return {
+            'type': 'project',
+            'projects': projects
+        }
+
+    def _split_into_projects(self, text: str) -> List[str]:
+        """1通のメールを複数の案件ブロックに分割する"""
+        lines = text.split('\n')
+        projects = []
+        current_project = []
         
-        # スキル形式の変換
-        skills_flat = []
-        for category, skills in skills_dict.items():
-            for skill in skills:
-                skills_flat.append({
-                    'name': skill['name'],
-                    'type': 'must' if skill.get('importance', 0) > 0.3 else 'want'
-                })
+        # 分割の目印となるパターン
+        split_patterns = [
+            r'^={5,}', r'^-{5,}', r'^_{5,}', r'^―{5,}', r'^━{5,}', r'^─{5,}',
+            r'^[【\[]案件[\]】]', r'^■案件', r'^案件\d+', r'^案件[①-⑳]'
+        ]
         
-        project_info['skills'] = skills_flat
-        project_info['type'] = self._determine_record_type(text) # テキストベースの高精度判定
-        
-        return project_info
+        for line in lines:
+            is_separator = any(re.match(p, line.strip()) for p in split_patterns)
+            if is_separator and len(current_project) > 5:
+                projects.append('\n'.join(current_project))
+                current_project = [line]
+            else:
+                current_project.append(line)
+                
+        if current_project:
+            projects.append('\n'.join(current_project))
+            
+        # 短すぎるブロック（挨拶や署名のみなど）を除外して返す
+        valid_projects = [p for p in projects if len(p.strip()) > 50]
+        return valid_projects if valid_projects else [text]
 
     def _determine_record_type(self, text: str) -> str:
         """
@@ -1105,18 +1130,10 @@ class SkillExtractor:
         return 'project'
 
     def extract_project_info(self, text: str) -> Dict[str, Any]:
-        """
-        テキストから案件情報（単価、商流、場所など）を抽出する
-        
-        Args:
-            text: 解析対象のテキスト
-            
-        Returns:
-            Dict: 抽出された案件情報
-        """
+        """テキストから見出しベースで案件情報を抽出する"""
         info = {
             'title': self._extract_title(text) or '案件名なし',
-            'description': text[:200] + '...' if len(text) > 200 else text, # 暫定的に冒頭を使用
+            'description': '',
             'min_price': None,
             'max_price': None,
             'price_text': None,
@@ -1124,29 +1141,84 @@ class SkillExtractor:
             'max_hours': None,
             'location': None,
             'commercial_flow': None,
-            'remote_type': None
+            'remote_type': None,
+            'must_skills': [],
+            'want_skills': []
         }
         
-        # 単価抽出
-        price_info = self._extract_price(text)
+        blocks = self._parse_blocks(text)
+        
+        # 業務内容
+        desc_lines = blocks.get('業務内容', '') or blocks.get('案件概要', '') or text[:300]
+        info['description'] = desc_lines[:300] + ('...' if len(desc_lines) > 300 else '')
+        
+        # スキル抽出
+        must_text = blocks.get('必須', '') or blocks.get('必須スキル', '')
+        want_text = blocks.get('尚可', '') or blocks.get('歓迎スキル', '')
+        
+        must_skills = []
+        want_skills = []
+        
+        if must_text or want_text:
+            if must_text:
+                for cat_skills in self.extract_skills(must_text).values():
+                    must_skills.extend([s['name'] for s in cat_skills])
+            if want_text:
+                for cat_skills in self.extract_skills(want_text).values():
+                    want_skills.extend([s['name'] for s in cat_skills])
+        else:
+            # 見出しがない場合は全体からスコアで判定
+            skills_dict = self.extract_skills(text)
+            for skills in skills_dict.values():
+                for skill in skills:
+                    if skill.get('importance', 0) > 0.3:
+                        must_skills.append(skill['name'])
+                    else:
+                        want_skills.append(skill['name'])
+                        
+        info['must_skills'] = list(set(must_skills))
+        info['want_skills'] = list(set(want_skills))
+        
+        # 単価
+        price_text = blocks.get('単価', '') or text
+        price_info = self._extract_price(price_text)
         if price_info:
             info.update(price_info)
             
-        # 精算幅抽出
-        hours_info = self._extract_hours(text)
+        # 場所・リモート
+        loc_text = blocks.get('場所', '') or blocks.get('勤務地', '') or text
+        info['location'] = self._extract_location(loc_text)
+        info['remote_type'] = self._extract_remote_type(loc_text + '\n' + text)
+        
+        # その他
+        info['commercial_flow'] = self._extract_commercial_flow(blocks.get('商流', '') or text)
+        hours_info = self._extract_hours(blocks.get('精算', '') or blocks.get('時間', '') or text)
         if hours_info:
             info.update(hours_info)
             
-        # 商流抽出
-        info['commercial_flow'] = self._extract_commercial_flow(text)
-        
-        # 稼働地抽出
-        info['location'] = self._extract_location(text)
-        
-        # リモートタイプ抽出
-        info['remote_type'] = self._extract_remote_type(text)
-        
         return info
+
+    def _parse_blocks(self, text: str) -> Dict[str, str]:
+        """本文を見出しごとにブロック分けする"""
+        blocks = defaultdict(list)
+        current_header = '全体'
+        
+        # [必須], 【尚可】, ■単価 などのパターン
+        header_pattern = r'^[【\[■◆▼]([^\】\]■◆▼]+)[】\]]?[:：]?\s*$|^([^\n]+)[:：]\s*$'
+        
+        for line in text.split('\n'):
+            line_s = line.strip()
+            match = re.search(header_pattern, line_s)
+            # 見出しは短いはず
+            if match and len(line_s) < 20:
+                header_name = match.group(1) or match.group(2)
+                if header_name:
+                    header_name = re.sub(r'[【】\[\]■◆▼:：\s]', '', header_name)
+                    current_header = header_name
+            else:
+                blocks[current_header].append(line)
+                
+        return {k: '\n'.join(v) for k, v in blocks.items()}
 
     def _extract_title(self, text: str) -> Optional[str]:
         """件名になりそうな行を抽出（簡易版）"""

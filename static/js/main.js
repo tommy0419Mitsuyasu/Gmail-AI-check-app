@@ -295,8 +295,6 @@ function initDragAndDrop() {
                                 // 結果セクションを表示
                                 if (elements.resultSection) {
                                     elements.resultSection.classList.remove('hidden');
-            sessionStorage.setItem('extractedSkills', JSON.stringify(result.skills));
-            if (result.extracted_text) sessionStorage.setItem('extractedText', result.extracted_text);
 
                                     elements.resultSection.scrollIntoView({ behavior: 'smooth' });
                                 }
@@ -434,11 +432,12 @@ function showResults(skills, extractedText) {
     }
     
     skills.forEach(skill => {
-        if (skill && skill.category_name) {
-            if (!categories[skill.category_name]) {
-                categories[skill.category_name] = [];
+        const cat = skill.category_name || skill.category || 'その他';
+        if (skill) {
+            if (!categories[cat]) {
+                categories[cat] = [];
             }
-            categories[skill.category_name].push(skill);
+            categories[cat].push(skill);
         }
     });
     
@@ -450,7 +449,7 @@ function showResults(skills, extractedText) {
                 <h3 class="text-lg font-medium text-gray-900 mb-2">${category}</h3>
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                     ${skillList.map(skill => {
-                        const skillName = skill.name || skill.skill_name || '不明なスキル';
+                        const skillName = skill.skill || skill.name || skill.skill_name || '不明なスキル';
                         return `
                         <label class="flex items-center p-2 rounded-md border border-gray-200 hover:bg-gray-50 cursor-pointer">
                             <input type="checkbox" 
@@ -490,8 +489,8 @@ function showResults(skills, extractedText) {
     // 結果セクションを表示
     if (elements.resultSection) {
         elements.resultSection.classList.remove('hidden');
-            sessionStorage.setItem('extractedSkills', JSON.stringify(result.skills));
-            if (result.extracted_text) sessionStorage.setItem('extractedText', result.extracted_text);
+            sessionStorage.setItem('extractedSkills', JSON.stringify(skills));
+            if (extractedText) sessionStorage.setItem('extractedText', extractedText);
 
         // 結果セクションまでスクロール
         elements.resultSection.scrollIntoView({ behavior: 'smooth' });
@@ -958,6 +957,21 @@ function displayProjects(projects, searchSkills = []) {
                     ${skillsHtml}
                 </div>
                 
+                ${project.subject ? `
+                <div class="mb-4 p-3 bg-gray-50 rounded text-sm text-gray-700">
+                    <p class="mb-1"><span class="font-semibold text-gray-900">件名:</span> ${project.subject}</p>
+                    <p class="mb-1"><span class="font-semibold text-gray-900">送信元:</span> ${project.sender || '不明'}</p>
+                    ${project.message_id ? `
+                        <p class="mt-2">
+                            <a href="https://mail.google.com/mail/u/0/#all/${project.message_id}" target="_blank" class="text-blue-600 hover:text-blue-800 underline flex items-center">
+                                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                                Gmailでメールを開く
+                            </a>
+                        </p>
+                    ` : ''}
+                </div>
+                ` : ''}
+                
                 <div class="flex flex-wrap items-center text-sm text-gray-500 gap-4">
                     ${project.location ? `
                         <div class="flex items-center">
@@ -1302,6 +1316,11 @@ async function handleFileUpload(event) {
             // スキル抽出結果を表示
             if (result.skills) {
                 showResults(result.skills, result.extracted_text || '');
+                const resultSection = document.getElementById('resultSection');
+                if (resultSection) {
+                    resultSection.classList.remove('hidden');
+                    resultSection.scrollIntoView({ behavior: 'smooth' });
+                }
             } else {
                 showError('エラー', 'スキルの抽出に失敗しました', 'スキル情報が見つかりませんでした。');
             }
@@ -1329,6 +1348,9 @@ async function handleFileUpload(event) {
 function initializeApp() {
     console.log('アプリケーションを初期化しています...');
     
+    // DOM要素をキャッシュ
+    initElements();
+
     // ドラッグ＆ドロップの初期化
     initDragAndDrop();
     
@@ -1352,11 +1374,6 @@ function initializeApp() {
         });
     }
     
-    // アップロードフォームの送信イベントを設定
-    const uploadForm = document.getElementById('uploadForm');
-    if (uploadForm) {
-        uploadForm.addEventListener('submit', handleFileUpload);
-    }
     
     // 戻るボタンのイベントリスナーを設定
     const backToUpload = document.getElementById('backToUpload');
@@ -1571,11 +1588,11 @@ window.viewProjectDetails = function(projectId) {
     const project = projectList.find(p => p.id == projectId);
     if (project) {
         const titleEl = document.getElementById('modal-title');
-        if (titleEl) titleEl.textContent = project.title || project.name || '�Č��ڍ�';
+        if (titleEl) titleEl.textContent = project.title || project.name || 'Čڍ';
         
         const contentEl = document.getElementById('modal-content');
         if (contentEl) {
-            const content = project.email_body || project.description || '�ڍ׏�񂪂���܂���B';
+            const content = project.email_body || project.description || 'ڍ׏񂪂܂B';
             contentEl.textContent = content;
         }
         

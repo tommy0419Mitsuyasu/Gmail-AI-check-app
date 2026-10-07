@@ -5,27 +5,6 @@ from typing import Dict, List, Any, Optional
 NLTK_AVAILABLE = False
 
 # ========== ノイズとして除外すべきワード ==========
-# 役割種別（スキルではない）
-ROLE_WORDS = {
-    'pg', 'pm', 'tl', 'sl', 'se', 'pmo', 'pm/pmo', 'tl/sl',
-    'プログラマー', 'プログラマ', 'テックリード', 'プロジェクトマネージャー',
-    'サブリーダー', 'チームリーダー', 'スクラムマスター',
-}
-
-# 列ヘッダー（スキルシートの表ヘッダー）
-COLUMN_HEADER_WORDS = {
-    'os/db', 'os', 'db', 'fw', 'ツール', '言語', 'フレームワーク',
-    '開発環境', '各種サービス', '言語 fw/ツール', 'os/db/サーバー',
-    '業種', 'システム名称', '業務内容', '期間', '年　月数',
-    '役割', 'メンバー数', '作業工程', '経験年数', '合計年数',
-}
-
-# 業務工程名（抽出しなくてよい）
-PROCESS_WORDS = {
-    '基本設計', '詳細設計', '製造', '単体試験', '結合試験', '総合試験',
-    '運用', '保守', 'マネジメント', '調査', '分析', '要件定義',
-}
-
 # 個人情報・場所など（スキルではない）
 PERSONAL_INFO_PATTERNS = [
     r'^\d{1,3}歳?$',         # 年齢
@@ -120,29 +99,9 @@ class RezumeParser:
 
     def _preprocess_text(self, text: str) -> str:
         """スキルシートの縦書き・壊れた文字を前処理して読みやすくする"""
-        # 連続した1文字の漢字単語を結合（縦書きによる分割対策）
-        # 例: "単\n体\n試\n験" -> 除去対象ではないが、行単位で処理するため影響小
-        # 行ごとに処理しやすくするため改行を正規化
         text = re.sub(r'\r\n', '\n', text)
         text = re.sub(r'\r', '\n', text)
         return text
-
-    def _is_noise_token(self, token: str) -> bool:
-        """トークンがノイズかどうかを判定"""
-        t = token.strip().lower()
-        if not t or len(t) <= 1:
-            return True
-        # 役割ワード
-        if t in ROLE_WORDS:
-            return True
-        # 列ヘッダー
-        if t in COLUMN_HEADER_WORDS:
-            return True
-        # 個人情報パターン
-        for pat in PERSONAL_INFO_PATTERNS:
-            if re.match(pat, token.strip()):
-                return True
-        return False
 
     def _is_tech_table_line(self, line: str) -> bool:
         """この行が技術スタック表の行かどうか推定する"""
@@ -152,7 +111,6 @@ class RezumeParser:
         # スラッシュ区切りで複数の技術名が並んでいる行
         slash_parts = re.split(r'[/／]', line)
         if len(slash_parts) >= 2:
-            # 全体の50%以上が辞書に載っている場合は技術行と判断
             hit = sum(
                 1 for p in slash_parts
                 if p.strip().lower() in self.skill_aliases
@@ -164,12 +122,6 @@ class RezumeParser:
     def _segment_text(self, text: str) -> Dict[str, List[str]]:
         """
         スキルシートをセクションごとに分割。
-        Returns:
-            {
-              'tech_table': [技術スタックが書かれた行のリスト],
-              'project_desc': [業務内容・システム概要の文章行],
-              'other': [それ以外の行]
-            }
         """
         lines = text.split('\n')
         segments = {'tech_table': [], 'project_desc': [], 'other': []}
@@ -181,7 +133,6 @@ class RezumeParser:
             if not stripped:
                 continue
 
-            # プロジェクト説明セクション開始判定
             is_section_header = False
             for pat in SECTION_PATTERNS['project_detail']:
                 if re.search(pat, stripped):
@@ -197,20 +148,130 @@ class RezumeParser:
             if is_section_header:
                 continue
 
-            # 技術スタック行の判定
             if self._is_tech_table_line(stripped):
                 segments['tech_table'].append(stripped)
                 continue
 
-            # プロジェクト説明セクション内の行
             if in_project_section:
                 segments['project_desc'].append(stripped)
                 continue
 
-            # その他
             segments['other'].append(stripped)
 
         return segments
+
+    # ========== 工程抽出 (NEW) ==========
+    
+    def _extract_processes(self, text: str) -> List[Dict]:
+        """ステートマシンとマトリクスによる厳密な工程抽出"""
+        lines = text.split('\n')
+        extracted_processes = set()
+        
+        # 1. 抽出ON/OFFのヘッダー正規表現
+        start_pattern = re.compile(r'【担当業務】|≪担当業務≫|【担当】|【役割】|■担当業務|■役割')
+        end_pattern = re.compile(r'【システム概要】|【開発環境】|【実績】|【チーム体制】|【開発手法】|■システム概要|■開発環境')
+        
+        # 汎用的な見出しを検知 (これで囲まれている場合は別セクションとみなす)
+        header_pattern = re.compile(r'^【.+】|^≪.+≫|^■.+')
+        
+        # 2. 工程のキーワード辞書 (正規化用)
+        process_keywords = {
+            '要件定義': r'要件定義',
+            '基本設計': r'基本設計',
+            '詳細設計': r'詳細設計',
+            '製造': r'製造|実装',
+            '単体テスト': r'単体テスト|単体試験|UT',
+            '結合テスト': r'結合テスト|結合試験|IT',
+            '総合テスト': r'総合テスト|総合試験|ST',
+            '運用': r'運用',
+            '保守': r'保守'
+        }
+        
+        # 3. マトリクス用ヘッダー辞書 (SES特有のフラグ表)
+        matrix_headers = {
+            '要件定義': r'要件?定義?|要',
+            '基本設計': r'基本?設計?|基',
+            '詳細設計': r'詳細?設計?|詳',
+            '製造': r'製造|実装|製',
+            '単体テスト': r'単体(?:テスト|試験)?|単',
+            '結合テスト': r'結合(?:テスト|試験)?|結',
+            '総合テスト': r'総合(?:テスト|試験)?|総',
+            '運用': r'運用|運',
+            '保守': r'保守|保'
+        }
+        
+        in_task_section = False
+        matrix_mapping = {} # 文字インデックス -> 工程名
+        
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+                
+            # --- ステートマシンの状態更新 ---
+            is_header = bool(header_pattern.search(stripped))
+            if start_pattern.search(stripped):
+                in_task_section = True
+                matrix_mapping = {}
+                continue
+            elif end_pattern.search(stripped) or is_header:
+                # 終了ヘッダー、もしくは他の汎用ヘッダーが来たらOFFにする
+                in_task_section = False
+                matrix_mapping = {}
+                continue
+                
+            # --- マトリクス表の検知 ---
+            # 工程の文字が複数(3つ以上)含まれる行をマトリクスヘッダーとみなす
+            hit_count = 0
+            temp_mapping = {}
+            for proc_name, pat in matrix_headers.items():
+                for m in re.finditer(pat, line):  # strippedではなく元のlineを使って正確な位置を保持
+                    temp_mapping[m.start()] = proc_name
+                    hit_count += 1
+            
+            if hit_count >= 3:
+                matrix_mapping = temp_mapping
+                continue # この行自体からは通常抽出しない
+                
+            # マトリクスデータ行の検知 (〇, ◎, ◯ があるか)
+            if matrix_mapping and re.search(r'[〇◎◯]', line):
+                for m in re.finditer(r'[〇◎◯]', line):
+                    idx = m.start()
+                    # 最も近い見出し（ヘッダー）を探す
+                    closest_proc = None
+                    min_dist = 999
+                    for h_idx, proc_name in matrix_mapping.items():
+                        dist = abs(h_idx - idx)
+                        if dist < min_dist:
+                            min_dist = dist
+                            closest_proc = proc_name
+                    
+                    # 距離が一定以内（ズレを許容して5文字以内）なら抽出
+                    if closest_proc and min_dist <= 5:
+                        extracted_processes.add(closest_proc)
+            
+            # --- テキストベースの工程抽出 ---
+            if in_task_section:
+                for proc_name, pat in process_keywords.items():
+                    if re.search(pat, stripped, re.IGNORECASE):
+                        extracted_processes.add(proc_name)
+                        
+        # 抽出した工程をスキルフォーマットに変換
+        process_skills = []
+        for proc in extracted_processes:
+            process_skills.append({
+                'name': proc,
+                'type': 'PROCESS',
+                'start': 0,
+                'end': 0,
+                'importance': 1.5, # 工程はマッチングにおいて重要
+                'confidence': 0.95,
+                'context': 'task_section',
+                'source': 'process_extractor',
+                'category': 'process'
+            })
+            
+        return process_skills
 
     # ========== スキル抽出 ==========
 
@@ -223,7 +284,6 @@ class RezumeParser:
 
         for skill_lower, skill_info in self.skill_aliases.items():
             escaped = re.escape(skill_lower)
-            # 単語境界チェック（日本語・英語混在に対応）
             pattern = r'(?:^|[\s/／・、。,\(\)【】]|(?<=[^a-zA-Z0-9_]))' + \
                       escaped + \
                       r'(?:$|[\s/／・、。,\(\)【】]|(?=[^a-zA-Z0-9_]))'
@@ -247,13 +307,18 @@ class RezumeParser:
         return skills
 
     def _extract_skills(self, text: str) -> List[Dict]:
-        """テキストからスキルを抽出するプライベートメソッド（セクション対応版）"""
+        """テキストからスキルを抽出する（セクション対応版＋厳密な工程抽出）"""
         if not text or not isinstance(text, str):
             return []
 
-        text = self._preprocess_text(text)
-        segments = self._segment_text(text)
-
+        # 前処理
+        processed_text = self._preprocess_text(text)
+        
+        # 1. 厳密な工程抽出（ステートマシン＆マトリクス）
+        process_skills = self._extract_processes(processed_text)
+        
+        # 2. 技術スタックの抽出
+        segments = self._segment_text(processed_text)
         all_skills: Dict[str, Dict] = {}  # name_lower -> skill_info
 
         def _merge(new_skills: List[Dict], weight_boost: float = 1.0):
@@ -276,7 +341,11 @@ class RezumeParser:
         other_text = '\n'.join(segments['other'])
         _merge(self._extract_skills_from_text(other_text, weight=1.0), weight_boost=0.8)
 
-        # 重要度の高い順にソート
+        # 3. 工程スキルと技術スタックを統合
+        for p_skill in process_skills:
+            all_skills[p_skill['name'].lower()] = p_skill
+
+        # 重要度の高い順にソートして返す
         result = sorted(all_skills.values(), key=lambda x: x['importance'], reverse=True)
         return result
 

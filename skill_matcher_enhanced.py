@@ -447,12 +447,13 @@ def calculate_domain_expertise(skills: List[Dict]) -> Dict[str, float]:
         return {k: v/total for k, v in domain_scores.items()}
     return {}
 
-def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: List[Dict]) -> Dict:
+def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: List[Dict], candidate_vectors=None) -> Dict:
     """スキルマッチングを強化する
     
     Args:
         project_requirements: プロジェクト要件のリスト
         candidate_skills: 候補者のスキルリスト（{'name': スキル名, 'level': レベル, ...}の形式）
+        candidate_vectors: 候補者のスキルの事前計算済みベクトル（オプション）
         
     Returns:
         マッチング結果を含む辞書
@@ -509,21 +510,24 @@ def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: L
     max_possible_score = 0.0
 
     # 候補スキルのベクトルをキャッシュ（一括エンコード）
-    candidate_vectors = {}
-    if normalized_candidate_skills:
-        skills_to_encode = list(normalized_candidate_skills.keys())
-        try:
-            vectors = vector_engine.encode(skills_to_encode)
-            # ベクトルが1つの場合でもリストとして扱えるように修正
-            if len(skills_to_encode) == 1 and vectors.ndim == 1:
-                vectors = vectors.reshape(1, -1)
-                
-            for i, skill in enumerate(skills_to_encode):
-                if i < len(vectors):
-                    candidate_vectors[skill] = vectors[i]
-        except Exception as e:
-            print(f"Vector encoding error: {e}")
-            # エラー時は空の辞書のまま進む（通常の文字マッチングのみになる）
+    if candidate_vectors is None:
+        candidate_vectors = {}
+        if normalized_candidate_skills:
+            skills_to_encode = list(normalized_candidate_skills.keys())
+            try:
+                vectors = vector_engine.encode(skills_to_encode)
+                # ベクトルが1つの場合でもリストとして扱えるように修正
+                if len(skills_to_encode) == 1 and vectors.ndim == 1:
+                    vectors = vectors.reshape(1, -1)
+                    
+                for i, skill in enumerate(skills_to_encode):
+                    if i < len(vectors):
+                        candidate_vectors[skill] = vectors[i]
+            except Exception as e:
+                import logging
+                logging.error(f"Failed to encode candidate skills: {e}")
+                print(f"Vector encoding error: {e}")
+                # エラー時は空の辞書のまま進む（通常の文字マッチングのみになる）
     
     # 案件要件のベクトルをキャッシュ（一括エンコード）
     requirement_vectors = {}
@@ -605,7 +609,7 @@ def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: L
             continue
             
         # 2. 類似度が高いスキルをチェック
-        best_similarity = 0.5  # 類似度の閾値（緩和）
+        best_similarity = 0.85  # 類似度の閾値を上げて誤検知を防ぐ
         best_match = None
         best_original_name = None
         best_domain_score = 0.0
@@ -627,7 +631,10 @@ def enhance_skill_matching(project_requirements: List[Dict], candidate_skills: L
             
             # ベクトルベースの類似度
             cand_vector = candidate_vectors.get(cand_skill)
-            vector_similarity = vector_engine.calculate_similarity(req_vector, cand_vector)
+            if cand_vector is not None and req_vector is not None:
+                vector_similarity = vector_engine.calculate_similarity(req_vector, cand_vector)
+            else:
+                vector_similarity = 0.0
             
             # 統合類似度
             similarity = max(text_similarity, vector_similarity)
