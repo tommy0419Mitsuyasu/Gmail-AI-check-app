@@ -961,14 +961,7 @@ function displayProjects(projects, searchSkills = []) {
                 <div class="mb-4 p-3 bg-gray-50 rounded text-sm text-gray-700">
                     <p class="mb-1"><span class="font-semibold text-gray-900">件名:</span> ${project.subject}</p>
                     <p class="mb-1"><span class="font-semibold text-gray-900">送信元:</span> ${project.sender || '不明'}</p>
-                    ${project.message_id ? `
-                        <p class="mt-2">
-                            <a href="https://mail.google.com/mail/u/0/#all/${project.message_id}" target="_blank" class="text-blue-600 hover:text-blue-800 underline flex items-center">
-                                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
-                                Gmailでメールを開く
-                            </a>
-                        </p>
-                    ` : ''}
+                    
                 </div>
                 ` : ''}
                 
@@ -1581,25 +1574,50 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // Global modal functions
-window.viewProjectDetails = function(projectId) {
+window.viewProjectDetails = async function(projectId) {
     if (!projectId) return;
     // Check both global arrays (topPageProjects from main.js, allProjects from projects.html)
     const projectList = window.topPageProjects || (typeof allProjects !== 'undefined' ? allProjects : []);
     const project = projectList.find(p => p.id == projectId);
     if (project) {
         const titleEl = document.getElementById('modal-title');
-        if (titleEl) titleEl.textContent = project.title || project.name || 'Čڍ';
+        if (titleEl) titleEl.textContent = project.title || project.subject || project.name || '無題の案件';
         
         const contentEl = document.getElementById('modal-content');
-        if (contentEl) {
-            const content = project.email_body || project.description || 'ڍ׏񂪂܂B';
-            contentEl.textContent = content;
-        }
-        
         const modal = document.getElementById('projectModal');
         if (modal) modal.classList.remove('hidden');
+
+        if (contentEl) {
+            if (project.message_id) {
+                contentEl.textContent = 'メール詳細を読み込み中...';
+                try {
+                    const response = await fetch(`/api/emails/${encodeURIComponent(project.message_id)}`);
+                    const data = await response.json();
+                    
+                    let header = '';
+                    if (project.description) {
+                        header = project.description + '\\n\\n' + '-'.repeat(40) + '\\n\\n';
+                    }
+                    
+                    if (data.status === 'success' && data.email) {
+                        contentEl.textContent = header + (data.email.body || '本文がありません。');
+                    } else {
+                        contentEl.textContent = header + 'メール詳細を取得できませんでした。';
+                    }
+                } catch (error) {
+                    console.error('メール取得エラー:', error);
+                    let header = project.description ? project.description + '\\n\\n' : '';
+                    contentEl.textContent = header + 'エラーが発生しました。';
+                }
+            } else {
+                const content = project.email_body || project.description || '詳細情報がありません。';
+                contentEl.textContent = content;
+            }
+        }
     }
-};
+}
+
+
 
 window.closeProjectModal = function() {
     const modal = document.getElementById('projectModal');

@@ -38,6 +38,10 @@ def authorize():
         )
 
         session['state'] = state
+        # 1.0.0以降のPKCE対応のためcode_verifierを保存
+        if getattr(flow, 'code_verifier', None):
+            session['code_verifier'] = flow.code_verifier
+            
         return redirect(authorization_url)
 
     except Exception as e:
@@ -56,6 +60,10 @@ def auth_callback():
             state=state
         )
         flow.redirect_uri = url_for('gmail.auth_callback', _external=True)
+        
+        code_verifier = session.get('code_verifier')
+        if code_verifier:
+            flow.code_verifier = code_verifier
 
         authorization_response = request.url
         # fetch_tokenでアクセストークンを取得

@@ -197,19 +197,28 @@ def match_projects():
 
 @api_bp.route('/api/emails/<email_id>', methods=['GET'])
 def get_email(email_id):
-    """Gmailの特定メールの詳細とマッチする案件を取得するAPI"""
-    # スタブ実装
-    return jsonify({
-        'status': 'success',
-        'email': {
-            'subject': '未実装のメール内容',
-            'from': '未実装',
-            'date': '2025-01-01',
-            'body': f'ID {email_id} のメール詳細取得は現在開発中の機能です。'
-        },
-        'extracted_skills': [],
-        'matched_projects': []
-    })
+    """Gmailの特定メールの詳細を取得するAPI"""
+    try:
+        conn = get_db()
+        row = conn.execute('SELECT subject, sender, received_at, body FROM emails WHERE message_id = ?', (email_id,)).fetchone()
+        conn.close()
+        
+        if row:
+            return jsonify({
+                'status': 'success',
+                'email': {
+                    'subject': row['subject'],
+                    'from': row['sender'],
+                    'date': row['received_at'],
+                    'body': row['body']
+                }
+            })
+        else:
+            return jsonify({'status': 'error', 'message': 'メールが見つかりません'}), 404
+            
+    except Exception as e:
+        logger.error(f"メール詳細取得中にエラーが発生しました: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @api_bp.route('/api/save_skills', methods=['POST'])
 def save_skills():

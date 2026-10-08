@@ -18,7 +18,7 @@ load_dotenv()
 
 app = Flask(__name__)
 # セッション暗号化用キー（本番環境では環境変数から設定することを推奨）
-app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(16))
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'default_secret_key_for_development_12345')
 
 # アップロード設定
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
