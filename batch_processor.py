@@ -6,6 +6,7 @@ import base64
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -195,6 +196,10 @@ class BatchProcessor:
                     batch.add(self.service.users().messages().get(userId='me', id=msg_id, format='full'))
                 try:
                     batch.execute()
+                    
+                    # APIレートリミット（1ユーザーあたり秒間250件制限等）の超過を防ぐためのウェイト処理
+                    # （バッチサイズ50件 × 5ユニット = 250ユニット/秒を消費するため、安全に2秒待機）
+                    time.sleep(2)
                 except Exception as e:
                     logging.error(f"Batch execution failed: {e}")
                     
@@ -204,6 +209,14 @@ class BatchProcessor:
 
         except Exception as e:
             logging.error(f"Error during fetch: {e}")
+            
+        # 最後に古いデータのクリーンアップを実行（30日以上前のデータを削除）
+        try:
+            logging.info("Starting cleanup of old data (older than 30 days)...")
+            deleted_count = db_manager.cleanup_old_data(days=30)
+            logging.info(f"Cleanup completed. Deleted {deleted_count} old emails.")
+        except Exception as e:
+            logging.error(f"Error during cleanup: {e}")
 
     def _process_single_message(self, msg: Dict, existing_simhashes: set):
         """1通のメールを詳細解析・保存する"""

@@ -575,5 +575,65 @@ class DBManager:
         finally:
             conn.close()
 
+    def cleanup_old_data(self, days: int = 30) -> int:
+        """指定した日数より古いデータを削除する"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # 基準となる日時を計算
+            from datetime import timedelta
+            threshold_date = (datetime.utcnow() - timedelta(days=days)).isoformat()
+            
+            # 削除対象のメールIDを取得
+            cursor.execute("SELECT message_id FROM emails WHERE received_at < ?", (threshold_date,))
+            old_emails = [row[0] for row in cursor.fetchall()]
+            
+            if not old_emails:
+                return 0
+                
+            # SQLiteのIN句制限を考慮して分割処理
+            total_deleted = 0
+            batch_size = 500
+            
+            for i in range(0, len(old_emails), batch_size):
+                batch_emails = old_emails[i:i+batch_size]
+                placeholders = ','.join(['?'] * len(batch_emails))
+                
+                # 紐づくプロジェクトIDを取得
+                cursor.execute(f"SELECT id FROM projects WHERE email_message_id IN ({placeholders})", batch_emails)
+                project_ids = [row[0] for row in cursor.fetchall()]
+                
+                if project_ids:
+                    p_placeholders = ','.join(['?'] * len(project_ids))
+                    
+                    # 関連テーブルの削除
+                    cursor.execute(f"DELETE FROM project_skills WHERE project_id IN ({p_placeholders})", project_ids)
+                    cursor.execute(f"DELETE FROM match_feedback WHERE project_id IN ({p_placeholders})", project_ids)
+                    cursor.execute(f"DELETE FROM projects_fts WHERE rowid IN ({p_placeholders})", project_ids)
+                    cursor.execute(f"DELETE FROM projects WHERE id IN ({p_placeholders})", project_ids)
+                
+                # メールの削除
+                cursor.execute(f"DELETE FROM emails WHERE message_id IN ({placeholders})", batch_emails)
+                
+                total_deleted += len(batch_emails)
+                
+            conn.commit()
+            
+            # DBの不要領域を解放してサイズを縮小（重い処理なので最後に1回だけ）
+            cursor.execute("VACUUM")
+            
+            import logging
+            logging.info(f"Cleaned up {total_deleted} old emails (older than {days} days)")
+            return total_deleted
+            
+        except sqlite3.Error as e:
+            import logging
+            logging.error(f"Failed to cleanup old data: {e}")
+            conn.rollback()
+            return 0
+        finally:
+            conn.close()
+
 # グローバルインスタンス
 db_manager = DBManager()

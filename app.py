@@ -90,8 +90,8 @@ def start_batch_scheduler():
             except Exception as e:
                 logger.error(f"定期バッチの実行中にエラーが発生しました: {e}", exc_info=True)
             
-            # 1時間に1回（3600秒）実行
-            time.sleep(3600)
+            # 5分に1回（300秒）実行
+            time.sleep(300)
             
     # Werkzeugの再起動ループでスレッドが二重起動するのを防ぐ
     if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not app.debug:
