@@ -108,14 +108,7 @@
                 </div>
             </div>
 
-            <div class="mt-8 flex justify-between">
-                <button id="backToUpload" class="bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium py-2 px-6 rounded-lg transition">
-                    <i class="fas fa-arrow-left mr-2"></i>別のファイルをアップロード
-                </button>
-                <button id="goToProjectsBtn" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-6 rounded-lg transition">
-                    案件を探す <i class="fas fa-arrow-right ml-2"></i>
-                </button>
-            </div>
+            <!-- （重複していた中段のボタン群は削除しました） -->
         </div>
 
         <!-- エラーメッセージ表示用 -->
@@ -242,6 +235,9 @@
 
 <script>
 window.showResults = function(skills, text) {
+    // 抽出されたスキルをグローバルに保持（後で手動追加スキルと合わせるため）
+    window.currentSkills = skills || [];
+
     const textPreview = document.getElementById('textPreview');
     if (textPreview) {
         textPreview.textContent = text;
@@ -286,11 +282,31 @@ window.showResults = function(skills, text) {
 };
 
 document.addEventListener('DOMContentLoaded', function() {
-    const goToBtn = document.getElementById('goToProjectsBtn');
-    if (goToBtn) {
-        goToBtn.addEventListener('click', function() {
-            const engineerId = document.getElementById('engineerId')?.value || '1';
-            window.location.href = `/projects?engineerId=${engineerId}`;
+    // 手動スキル追加ボタンの挙動
+    const addSkillBtn = document.getElementById('addSkillBtn');
+    const skillsForm = document.getElementById('skillsForm');
+    
+    if (addSkillBtn && skillsForm) {
+        addSkillBtn.addEventListener('click', function() {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'flex items-center space-x-2 mt-2';
+            
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'flex-1 border border-gray-300 rounded-md shadow-sm px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500 manual-skill-input';
+            input.placeholder = '例: Python, React, AWS';
+            
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'text-red-500 hover:text-red-700 px-2 py-2';
+            removeBtn.innerHTML = '<i class="fas fa-trash"></i>';
+            removeBtn.onclick = function() { wrapper.remove(); };
+            
+            wrapper.appendChild(input);
+            wrapper.appendChild(removeBtn);
+            skillsForm.appendChild(wrapper);
+            
+            input.focus();
         });
     }
 });

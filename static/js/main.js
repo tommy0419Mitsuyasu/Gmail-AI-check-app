@@ -1363,10 +1363,68 @@ function initializeApp() {
     // "案件を探す" ボタンのイベントリスナーを設定
     const findProjectsBtn = document.getElementById('findProjectsBtn');
     if (findProjectsBtn) {
-        findProjectsBtn.addEventListener('click', function(e) {
+        findProjectsBtn.addEventListener('click', async function(e) {
             e.preventDefault();
-            // エンジニアIDをクエリに付加して案件検索ページへ遷移
+            
             const engineerId = document.getElementById('engineerId')?.value || '1';
+            
+            // 手動追加スキルを取得
+            const manualInputs = document.querySelectorAll('.manual-skill-input');
+            const manualSkills = [];
+            manualInputs.forEach(input => {
+                const val = input.value.trim();
+                if (val) {
+                    manualSkills.push({
+                        skill: val,
+                        category: '手動追加',
+                        importance: 1.0,
+                        experience: 0
+                    });
+                }
+            });
+            
+            // 画面上でチェックされた抽出スキルを取得
+            const checkedBoxes = document.querySelectorAll('.skill-checkbox:checked');
+            const checkedSkills = [];
+            checkedBoxes.forEach(box => {
+                try {
+                    const skillData = JSON.parse(box.dataset.skill);
+                    checkedSkills.push({
+                        skill: skillData.skill_name || skillData.skill || skillData.name || box.value,
+                        category: skillData.category_name || skillData.category || 'その他',
+                        importance: parseFloat(skillData.importance) || 0.5,
+                        experience: skillData.experience || skillData.experience_years || 0
+                    });
+                } catch (e) {
+                    checkedSkills.push({
+                        skill: box.value,
+                        category: 'その他'
+                    });
+                }
+            });
+            
+            // チェックされたスキルと手動追加スキルを結合して保存
+            const allSkills = [...checkedSkills, ...manualSkills];
+            
+            // スキルが空でも（全てチェック外した状態でも）保存して上書きする
+            try {
+                // APIに送信
+                await fetch('/api/save_skills', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify({
+                        engineerId: engineerId,
+                        skills: allSkills
+                    })
+                });
+            } catch (error) {
+                console.error('スキルの保存に失敗しました:', error);
+            }
+
+            // エンジニアIDをクエリに付加して案件検索ページへ遷移
             window.location.href = `/projects?engineerId=${encodeURIComponent(engineerId)}`;
         });
     }
