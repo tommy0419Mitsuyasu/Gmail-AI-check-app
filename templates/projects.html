@@ -326,6 +326,7 @@ function resetFiltersHandler() {
     currentFilters = {
         skills: [],
         locations: [],
+        employmentTypes: [],
         minSalary: null,
         maxSalary: null,
         searchQuery: ''
@@ -367,6 +368,10 @@ function updateFiltersFromUI() {
         // 勤務地フィルター
         const locationCheckboxes = document.querySelectorAll('input[name="location"]:checked');
         currentFilters.locations = Array.from(locationCheckboxes).map(cb => cb.value);
+        
+        // 雇用形態フィルター
+        const employmentCheckboxes = document.querySelectorAll('input[name="employment"]:checked');
+        currentFilters.employmentTypes = Array.from(employmentCheckboxes).map(cb => cb.value);
         
         // ソート順
         const sortBy = document.getElementById('sortBy');
@@ -463,6 +468,57 @@ function applySkillFilters(projects, skills) {
 }
 
 /**
+ * プロジェクトに対してローカルの全フィルター（キーワード、勤務地、雇用形態、スキル）を適用する
+ */
+function applyLocalFilters(projects) {
+    let filtered = applySkillFilters(projects, currentFilters.skills);
+    
+    // 検索キーワード
+    const q = currentFilters.searchQuery ? currentFilters.searchQuery.toLowerCase() : '';
+    // 勤務地
+    const locs = currentFilters.locations || [];
+    // 雇用形態
+    const emps = currentFilters.employmentTypes || [];
+    
+    if (q || locs.length > 0 || emps.length > 0) {
+        filtered = filtered.filter(p => {
+            const text = [
+                p.title || '',
+                p.description || '',
+                p.subject || '',
+                p.snippet || ''
+            ].join(' ').toLowerCase();
+            
+            // キーワードチェック
+            if (q && !text.includes(q)) return false;
+            
+            // 勤務地チェック (いずれかの勤務地がテキストに含まれていればOK)
+            if (locs.length > 0) {
+                if (!locs.some(loc => text.includes(loc.toLowerCase()))) return false;
+            }
+            
+            // 雇用形態チェック (いずれかの雇用形態がテキストに含まれていればOK)
+            if (emps.length > 0) {
+                // value('contract', 'permanent', 'freelance')を日本語にマッピング
+                const empMap = {
+                    'contract': '契約',
+                    'permanent': '正社員',
+                    'freelance': 'フリーランス'
+                };
+                if (!emps.some(emp => {
+                    const jp = empMap[emp] || emp;
+                    return text.includes(jp.toLowerCase());
+                })) return false;
+            }
+            
+            return true;
+        });
+    }
+    
+    return filtered;
+}
+
+/**
  * プロジェクト一覧を取得する
  */
 function fetchProjects() {
@@ -553,11 +609,20 @@ function fetchProjects() {
                 
                 if (skills.length > 0) {
                     console.log('マッチング処理を開始します:', skills);
+                    
+                    const requestBody = { skills: skills };
+                    if (currentFilters.minSalary) {
+                        requestBody.min_price = currentFilters.minSalary;
+                    }
+                    if (currentFilters.maxSalary) {
+                        requestBody.max_price = currentFilters.maxSalary;
+                    }
+                    
                     return fetch('/api/match_projects', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         credentials: 'same-origin',
-                        body: JSON.stringify({ skills: skills })
+                        body: JSON.stringify(requestBody)
                     })
                     .then(response => handleApiResponse(response))
                     .then(data => {
@@ -567,7 +632,7 @@ function fetchProjects() {
                         if (allProjects.length === 0) {
                             showNoProjectsMessage();
                         } else {
-                            const filteredProjects = applySkillFilters(allProjects, currentFilters.skills);
+                            const filteredProjects = applyLocalFilters(allProjects);
                             displayProjects(filteredProjects);
                         }
                     });
@@ -627,8 +692,8 @@ function fetchProjects() {
             if (allProjects.length === 0) {
                 showNoProjectsMessage();
             } else {
-                // スキルフィルターを適用
-                const filteredProjects = applySkillFilters(allProjects, currentFilters.skills);
+                // 全ローカルフィルターを適用
+                const filteredProjects = applyLocalFilters(allProjects);
                 displayProjects(filteredProjects);
             }
         })

@@ -32,6 +32,12 @@ def search_projects():
         keywords = request.args.get('q', '')
         min_price = request.args.get('min_salary', type=int)
         max_price = request.args.get('max_salary', type=int)
+        
+        # 単価が万円単位（1000未満）で送られてきた場合は円単位に変換
+        if min_price is not None and min_price < 1000:
+            min_price *= 10000
+        if max_price is not None and max_price < 1000:
+            max_price *= 10000
         # skillsはカンマ区切りで渡される可能性があるため対処
         raw_skills = request.args.getlist('skills')
         skills = []
@@ -153,14 +159,38 @@ def match_projects():
         data = request.json
         skills = data.get('skills', [])
         
+        # 単価フィルタリング用の値を取得（存在すれば整数に変換）
+        min_price_val = data.get('min_price')
+        max_price_val = data.get('max_price')
+        target_price = None
+        max_price = None
+        
+        if min_price_val:
+            try:
+                target_price = int(min_price_val)
+                # 単価が万円単位（1000未満）で送られてきた場合は円単位に変換
+                if target_price < 1000:
+                    target_price *= 10000
+            except ValueError:
+                pass
+                
+        if max_price_val:
+            try:
+                max_price = int(max_price_val)
+                # 単価が万円単位（1000未満）で送られてきた場合は円単位に変換
+                if max_price < 1000:
+                    max_price *= 10000
+            except ValueError:
+                pass
+        
         if not skills:
             return jsonify({'success': False, 'message': 'スキルが指定されていません'}), 400
 
         from matching_engine import get_engine
         engine = get_engine()
         
-        # 新しいマッチングエンジンでスコアリング（過去60日分、スコア20%以上）
-        result = engine.match(raw_skills=skills, days=60, limit=100, min_score=20.0)
+        # 新しいマッチングエンジンでスコアリング（過去60日分、スコア20%以上、単価指定があればフィルタリング）
+        result = engine.match(raw_skills=skills, days=60, limit=100, min_score=20.0, target_price=target_price, max_price=max_price)
         
         # APIレスポンス用にマッピング
         formatted_matches = []

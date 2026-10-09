@@ -451,13 +451,14 @@ function showResults(skills, extractedText) {
                     ${skillList.map(skill => {
                         const skillName = skill.skill || skill.name || skill.skill_name || '不明なスキル';
                         return `
-                        <label class="flex items-center p-2 rounded-md border border-gray-200 hover:bg-gray-50 cursor-pointer">
+                        <label class="flex items-center p-2 rounded-md border border-gray-200 hover:bg-gray-50 cursor-pointer transition-colors">
                             <input type="checkbox" 
                                    class="skill-checkbox h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 mr-2" 
                                    value="${skillName}" 
                                    data-skill='${JSON.stringify(skill)}'
+                                   onchange="this.nextElementSibling.classList.toggle('line-through'); this.nextElementSibling.classList.toggle('text-gray-400'); this.nextElementSibling.classList.toggle('text-gray-700'); this.parentElement.classList.toggle('bg-gray-100');"
                                    checked>
-                            <span class="text-sm text-gray-700">${skillName}</span>
+                            <span class="text-sm text-gray-700 transition-all">${skillName}</span>
                         </label>`;
                     }).join('')}
                 </div>
@@ -528,27 +529,23 @@ function setupFindProjectsButton() {
     }
     
     elements.findProjectsBtn.addEventListener('click', function() {
-        // セッションストレージからスキルを取得
-        const extractedSkills = sessionStorage.getItem('extractedSkills');
-        if (!extractedSkills) {
-            showError('スキルが見つかりません', 'スキルシートをアップロードしてから検索してください。');
+        // チェックされているスキルボックスを取得
+        const checkedBoxes = document.querySelectorAll('.skill-checkbox:checked');
+        if (checkedBoxes.length === 0) {
+            showError('スキルが見つかりません', '少なくとも1つのスキルを選択してから検索してください。');
             return;
         }
         
         try {
-            const skillsData = JSON.parse(extractedSkills);
             let skills = [];
-            
-            // カテゴリ別のスキルをフラットな配列に変換
-            Object.values(skillsData).forEach(category => {
-                if (Array.isArray(category)) {
-                    category.forEach(skill => {
-                        if (typeof skill === 'string') {
-                            skills.push(skill);
-                        } else if (skill && typeof skill === 'object' && skill.skill_name) {
-                            skills.push(skill.skill_name);
-                        }
-                    });
+            checkedBoxes.forEach(box => {
+                // DOM上のvalue（スキル名）をそのまま使用するか、data-skillからパースする
+                // バックエンドのmatching_engineは文字列の配列またはオブジェクトの配列を受け付ける
+                try {
+                    const skillData = JSON.parse(box.getAttribute('data-skill'));
+                    skills.push(skillData.skill_name || skillData.skill || skillData.name || box.value);
+                } catch (e) {
+                    skills.push(box.value);
                 }
             });
             
@@ -751,12 +748,19 @@ async function searchMatchingProjects(skills) {
     }
     
     try {
-        // APIリクエスト（POSTでskillsを送信）
+        // 検索時の希望単価を取得
+        const minSalaryInput = document.getElementById('minSalaryInput');
+        const min_price = minSalaryInput && minSalaryInput.value ? minSalaryInput.value : null;
+        
+        const maxSalaryInput = document.getElementById('maxSalaryInput');
+        const max_price = maxSalaryInput && maxSalaryInput.value ? maxSalaryInput.value : null;
+
+        // APIリクエスト（POSTでskills, min_price, max_priceを送信）
         const response = await fetch('/api/match_projects', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ skills })
+            body: JSON.stringify({ skills, min_price, max_price })
         });
         
         const data = await response.json();
@@ -1462,8 +1466,25 @@ function initProjectSearch() {
         // 既存のsearchMatchingProjects関数が定義されているか確認
         if (typeof searchMatchingProjects === 'function') {
             // 既存の関数を使用
-            const skills = JSON.parse(sessionStorage.getItem('extractedSkills') || '[]');
-            searchMatchingProjects(skills);
+            let skills = [];
+            const checkedBoxes = document.querySelectorAll('.skill-checkbox:checked');
+            if (checkedBoxes.length > 0) {
+                checkedBoxes.forEach(box => {
+                    try {
+                        const skillData = JSON.parse(box.getAttribute('data-skill'));
+                        skills.push(skillData.skill_name || skillData.skill || skillData.name || box.value);
+                    } catch (e) {
+                        skills.push(box.value);
+                    }
+                });
+            } else {
+                // チェックボックスがない/選ばれていない場合はフォールバック
+                const extracted = JSON.parse(sessionStorage.getItem('extractedSkills') || '[]');
+                Object.values(extracted).forEach(cat => {
+                    if (Array.isArray(cat)) cat.forEach(s => skills.push(s.skill_name || s.skill || s.name || s));
+                });
+            }
+            searchMatchingProjects([...new Set(skills)]);
         } else {
             // 新しい実装
             fetch('/api/find_matching_projects', {

@@ -686,7 +686,7 @@ class MatchingEngine:
                     profile[canon] = {'years': years, 'raw': name}
         return profile
 
-    def match(self, raw_skills: List, days: int = 60, limit: int = 100, min_score: float = 30.0) -> Dict:
+    def match(self, raw_skills: List, days: int = 60, limit: int = 100, min_score: float = 30.0, target_price: Optional[int] = None, max_price: Optional[int] = None) -> Dict:
         """候補者スキルに対して案件をスコアリングして返す"""
         self.update_index()
         cache = self._load_units(days)
@@ -710,6 +710,24 @@ class MatchingEngine:
 
         results = []
         for unit in cache['units']:
+            if target_price or max_price:
+                price_text = unit.get('price', '')
+                if not price_text:
+                    continue
+                from skill_extractor import skill_extractor
+                price_info = skill_extractor._extract_price(price_text)
+                if not price_info:
+                    continue
+                
+                project_max = price_info.get('max_price') or price_info.get('min_price', 0)
+                
+                # 下限のチェック（案件の最大単価が、希望する最低単価を下回っていたら弾く）
+                if target_price and project_max < target_price:
+                    continue
+                
+                # 上限のチェック（案件の最大単価が、設定した上限を超えていたら弾く）
+                if max_price and project_max > max_price:
+                    continue
             scored = self._score_unit(unit, profile, cand_w, core, core_denominator, idf)
             if scored and scored['match_percentage'] >= min_score:
                 results.append(scored)
