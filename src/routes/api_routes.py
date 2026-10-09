@@ -190,7 +190,7 @@ def match_projects():
         engine = get_engine()
         
         # 新しいマッチングエンジンでスコアリング（過去60日分、スコア20%以上、単価指定があればフィルタリング）
-        result = engine.match(raw_skills=skills, days=60, limit=100, min_score=20.0, target_price=target_price, max_price=max_price)
+        result = engine.match(raw_skills=skills, days=60, limit=200, min_score=20.0, target_price=target_price, max_price=max_price)
         
         # APIレスポンス用にマッピング
         formatted_matches = []
