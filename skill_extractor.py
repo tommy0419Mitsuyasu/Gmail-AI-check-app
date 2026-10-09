@@ -1028,10 +1028,24 @@ class SkillExtractor:
         return formatted
 
     def extract_all(self, text: str, use_ai: bool = False) -> Dict[str, Any]:
-        """テキストから案件情報とスキル情報を一括抽出する（見出しベース・複数案件対応）"""
+        """テキストから案件情報または人材情報を一括抽出する（見出しベース・複数対応）"""
         record_type = self._determine_record_type(text)
         if record_type == 'engineer':
-            return {'type': 'engineer'}
+            candidate_info = self.extract_candidate_info(text)
+            
+            # スキル形式の変換
+            skills_flat = []
+            for skill in candidate_info.pop('must_skills', []):
+                skills_flat.append({'name': skill, 'type': 'must'})
+            for skill in candidate_info.pop('want_skills', []):
+                skills_flat.append({'name': skill, 'type': 'want'})
+            
+            candidate_info['skills'] = skills_flat
+            
+            return {
+                'type': 'engineer',
+                'candidates': [candidate_info]
+            }
 
         project_texts = self._split_into_projects(text)
         projects = []
@@ -1128,6 +1142,72 @@ class SkillExtractor:
         if engineer_score > project_score and engineer_score > 2:
             return 'engineer'
         return 'project'
+
+    def extract_candidate_info(self, text: str) -> Dict[str, Any]:
+        """テキストから正規表現ベースで人材情報を抽出する"""
+        info = {
+            'name_initials': '',
+            'description': '',
+            'age': None,
+            'gender': '',
+            'nearest_station': '',
+            'start_date': '',
+            'min_price': None,
+            'max_price': None,
+            'work_type': '',
+            'must_skills': [],
+            'want_skills': []
+        }
+        
+        # 簡易的な抽出（詳細な抽出は今後のAI化または正規表現の拡張で対応）
+        
+        # 氏名/イニシャル抽出 (例: ■氏名：Y.R)
+        name_match = re.search(r'氏\s*名[\s：:]+([A-Za-z\.\s]+|[^\(（\n]+)', text)
+        if name_match:
+            info['name_initials'] = name_match.group(1).strip()
+            
+        # 年齢/性別抽出 (例: (女性/24歳) )
+        age_gender_match = re.search(r'[\(（]([男女人性]+)?\s*[/／]\s*(\d+)\s*歳?[\)）]', text)
+        if age_gender_match:
+            if age_gender_match.group(1):
+                info['gender'] = age_gender_match.group(1).replace('性', '')
+            info['age'] = int(age_gender_match.group(2))
+            
+        # 単価抽出 (既存の _extract_price を流用)
+        price_range = self._extract_price(text)
+        if price_range:
+            info['min_price'] = price_range.get('min_price')
+            info['max_price'] = price_range.get('max_price')
+            
+        # 稼働開始 (例: ■開始：11月～)
+        start_match = re.search(r'(?:開始|稼働)[\s：:]+([^\n]+)', text)
+        if start_match:
+            info['start_date'] = start_match.group(1).strip()
+            
+        # 最寄駅 (例: ■最寄：水道橋駅)
+        station_match = re.search(r'(?:最寄|最寄り駅?)[\s：:]+([^\n]+)', text)
+        if station_match:
+            info['nearest_station'] = station_match.group(1).strip()
+            
+        # 希望 (例: ■希望：リモート案件希望)
+        work_type_match = re.search(r'希\s*望[\s：:]+([^\n]+)', text)
+        if work_type_match:
+            info['work_type'] = work_type_match.group(1).strip()
+            
+        # 説明文としてテキスト全体を保持（詳細検索用）
+        info['description'] = text.strip()[:1000] # 長すぎる場合はカット
+        
+        # スキル抽出
+        must_skills = []
+        skills_dict = self.extract_skills(text)
+        for skills in skills_dict.values():
+            for skill in skills:
+                must_skills.append(skill['name'])
+        
+        info['must_skills'] = list(set(must_skills))
+        info['want_skills'] = []
+        
+        return info
 
     def extract_project_info(self, text: str) -> Dict[str, Any]:
         """テキストから見出しベースで案件情報を抽出する"""

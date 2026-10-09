@@ -270,9 +270,26 @@ class BatchProcessor:
                 db_manager.update_email_status(message_id, 'failed')
                 return
 
-            # 人材情報（スキルシート）の場合はスキップ
+            # 人材情報（スキルシート）の場合は人材DBに保存
             if extracted_data.get('type') == 'engineer':
-                logging.info(f"Skipping resume/engineer data: {message_id}")
+                candidates = extracted_data.get('candidates', [])
+                if candidates:
+                    for idx, candidate_info in enumerate(candidates):
+                        skills_list = candidate_info.pop('skills', [])
+                        if not candidate_info.get('name_initials'):
+                            candidate_info['name_initials'] = f"不明人材 ({idx+1})"
+                            
+                        # ベクトル計算
+                        cand_text = f"{candidate_info.get('name_initials', '')}\n{candidate_info.get('description', '')}\n{' '.join([s.get('name', '') for s in skills_list])}"
+                        emb_arr = vector_engine.encode(cand_text)
+                        emb_bytes = emb_arr.astype(np.float32).tobytes() if emb_arr.size > 0 else None
+                        
+                        db_manager.save_candidate(message_id, candidate_info, skills_list, embedding=emb_bytes)
+                    
+                    logging.info(f"Processed {len(candidates)} candidates from {message_id}")
+                else:
+                    logging.warning(f"No candidate info found in engineer email: {message_id}")
+                    
                 db_manager.update_email_status(message_id, 'done')
                 return
 

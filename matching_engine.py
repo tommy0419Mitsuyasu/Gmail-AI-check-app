@@ -854,6 +854,164 @@ class MatchingEngine:
             return body
         return '\n'.join(body.split('\n')[idx['line_start']:idx['line_end']])
 
+    def match_candidates(self, project_text: str, days: int = 60, limit: int = 100, min_score: float = 20.0, exclude_freelance: bool = False, exclude_b2b: bool = False) -> Dict:
+        """案件テキストに対して候補者（人材）をスコアリングして返す"""
+        # 1. 案件テキストから必須/尚可スキルなどを抽出
+        from skill_extractor import skill_extractor
+        project_info = skill_extractor.extract_project_info(project_text)
+        req_must = project_info.get('must_skills', [])
+        req_want = project_info.get('want_skills', [])
+        req_all = req_must + req_want
+        
+        if not req_all:
+            # 見出しベースで抽出できなかった場合は全体から抽出
+            all_extracted = skill_extractor._extract_skills_from_text(project_text)
+            req_must = all_extracted.get('must', [])
+            req_want = all_extracted.get('want', [])
+            req_all = req_must + req_want
+
+        # 名寄せ（正規化）した案件要求スキル
+        req_skills_canon = set()
+        for s in req_all:
+            for c in canonicalize_skill_name(s):
+                req_skills_canon.add(c)
+                
+        if not req_skills_canon:
+            return {'matches': [], 'requirements': [], 'total_candidates': 0, 'matched_candidates': 0}
+
+        # 2. データベースから人材情報をロード
+        conn = self._conn()
+        conn.row_factory = sqlite3.Row
+        try:
+            threshold = (datetime.now() - timedelta(days=days)).isoformat()
+            
+            c_rows = conn.execute('''
+                SELECT c.id, c.email_message_id, c.name_initials, c.age, c.gender,
+                       c.nearest_station, c.start_date, c.min_price, c.max_price,
+                       c.work_type, c.description,
+                       e.subject, e.sender, e.received_at
+                FROM candidates c
+                JOIN emails e ON c.email_message_id = e.message_id
+                WHERE e.received_at >= ?
+                ORDER BY e.received_at DESC
+            ''', (threshold,)).fetchall()
+            
+            if not c_rows:
+                return {'matches': [], 'requirements': list(req_skills_canon), 'total_candidates': 0, 'matched_candidates': 0}
+                
+            candidate_ids = [str(r['id']) for r in c_rows]
+            s_placeholders = ','.join('?' * len(candidate_ids))
+            
+            s_rows = conn.execute(f'''
+                SELECT cs.candidate_id, s.name, cs.type
+                FROM candidate_skills cs
+                JOIN skills s ON cs.skill_id = s.id
+                WHERE cs.candidate_id IN ({s_placeholders})
+            ''', candidate_ids).fetchall()
+            
+            cand_skills = {}
+            for r in s_rows:
+                cid = r['candidate_id']
+                if cid not in cand_skills:
+                    cand_skills[cid] = []
+                for c in canonicalize_skill_name(r['name']):
+                    cand_skills[cid].append(c)
+                    
+        finally:
+            conn.close()
+
+        # 3. 各人材のスコアリング
+        results = []
+        for row in c_rows:
+            cid = row['id']
+            c_skills = set(cand_skills.get(cid, []))
+            
+            # 要求スキルと保有スキルの積集合
+            hit_skills = req_skills_canon.intersection(c_skills)
+            
+            if not hit_skills:
+                continue
+                
+            # 簡易スコア算出: マッチしたスキル数 / 要求スキル数
+            match_percentage = (len(hit_skills) / len(req_skills_canon)) * 100.0
+            
+            # 追加評価: 単価マッチ (案件の上限単価 >= 人材の下限単価)
+            project_max = project_info.get('max_price') or project_info.get('min_price')
+            cand_min = row['min_price']
+            
+            if project_max and cand_min:
+                if cand_min <= project_max:
+                    match_percentage += 10.0 # 単価マッチボーナス
+                else:
+                    match_percentage -= 20.0 # 予算オーバーペナルティ
+                    
+            # フィルタリング機能 (フリーランス・他社所属の除外)
+            desc_text = (row['description'] or '').lower()
+            if exclude_freelance:
+                if 'フリーランス' in desc_text or '個人事業主' in desc_text:
+                    continue # 弾く
+            if exclude_b2b:
+                if '1社先' in desc_text or '一社先' in desc_text or 'bp' in desc_text or 'パートナー' in desc_text:
+                    continue # 弾く
+
+            # 追加評価: 勤務地・最寄駅の簡易エリアボーナス (+5点)
+            area_dict = {
+                '東京': ['東京', '新宿', '渋谷', '品川', '池袋', '秋葉原', '六本木', '五反田', '新橋', '恵比寿', '目黒', '代々木', '神田', '浜松町'],
+                '神奈川': ['神奈川', '横浜', '川崎', '武蔵小杉', 'みなとみらい', '新横浜'],
+                '埼玉': ['埼玉', '大宮', '浦和', '和光市'],
+                '千葉': ['千葉', '幕張', '船橋', '柏'],
+                '関西': ['大阪', '梅田', '新大阪', '三宮', '神戸', '京都'],
+            }
+            
+            proj_loc = (project_info.get('location') or project_text).lower()
+            cand_loc = (row['nearest_station'] or '') + ' ' + (row['work_type'] or '')
+            
+            # リモート一致
+            if 'リモート' in proj_loc and 'リモート' in cand_loc:
+                match_percentage += 5.0
+            else:
+                # エリア一致
+                for area, keywords in area_dict.items():
+                    if any(k in proj_loc for k in keywords) and any(k in cand_loc for k in keywords):
+                        match_percentage += 5.0
+                        break
+
+            match_percentage = min(match_percentage, 100.0)
+            match_percentage = max(match_percentage, 0.0)
+
+            
+            if match_percentage >= min_score:
+                results.append({
+                    'candidate_id': cid,
+                    'message_id': row['email_message_id'],
+                    'name_initials': row['name_initials'],
+                    'age': row['age'],
+                    'gender': row['gender'],
+                    'nearest_station': row['nearest_station'],
+                    'start_date': row['start_date'],
+                    'min_price': row['min_price'],
+                    'max_price': row['max_price'],
+                    'work_type': row['work_type'],
+                    'description': row['description'],
+                    'subject': row['subject'],
+                    'sender': row['sender'],
+                    'received_at': row['received_at'],
+                    'hit_skills': list(hit_skills),
+                    'all_skills': list(c_skills),
+                    'match_percentage': match_percentage,
+                    'match_reasons': [f"案件が求める必須スキル（{len(req_skills_canon)}件）のうち、{len(hit_skills)}件（{', '.join(list(hit_skills)[:3])}等）がマッチしています。"]
+                })
+                
+        # マッチ率降順、受信日降順でソート
+        results.sort(key=lambda x: (x['match_percentage'], x['received_at']), reverse=True)
+        
+        return {
+            'matches': results[:limit],
+            'requirements': list(req_skills_canon),
+            'total_candidates': len(c_rows),
+            'matched_candidates': len(results)
+        }
+
 
 _engine: Optional[MatchingEngine] = None
 _engine_lock = threading.Lock()

@@ -37,6 +37,11 @@ def engineers_page():
     """エンジニア一覧画面"""
     return render_template('engineers.html')
 
+@view_bp.route('/reverse_search')
+def reverse_search_page():
+    """案件から人材を探す画面"""
+    return render_template('reverse_search.html')
+
 # エラーハンドラー
 @view_bp.app_errorhandler(404)
 def page_not_found(e):

@@ -138,7 +138,63 @@ class DBManager:
             cursor.execute('DROP TRIGGER IF EXISTS projects_ad')
             cursor.execute('DROP TRIGGER IF EXISTS projects_au')
 
-            # 6. フィードバック用テーブル
+            # 6. 人材情報用テーブル (candidates)
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email_message_id TEXT,
+                name_initials TEXT,
+                age INTEGER,
+                gender TEXT,
+                nearest_station TEXT,
+                start_date TEXT,
+                min_price INTEGER,
+                max_price INTEGER,
+                work_type TEXT,
+                description TEXT,
+                embedding BLOB,
+                FOREIGN KEY (email_message_id) REFERENCES emails(message_id)
+            )
+            ''')
+
+            # 7. 人材スキル連携テーブル (candidate_skills)
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS candidate_skills (
+                candidate_id INTEGER,
+                skill_id INTEGER,
+                type TEXT DEFAULT 'must', -- must, nice_to_have
+                FOREIGN KEY (candidate_id) REFERENCES candidates(id),
+                FOREIGN KEY (skill_id) REFERENCES skills(id),
+                PRIMARY KEY (candidate_id, skill_id)
+            )
+            ''')
+
+            # 8. 人材用 FTS5 仮想テーブル（全文検索用）
+            cursor.execute("SELECT sql FROM sqlite_master WHERE name = 'candidates_fts'")
+            row = cursor.fetchone()
+            if not row or 'trigram' not in row[0].lower():
+                if row:
+                    cursor.execute('DROP TABLE candidates_fts')
+                cursor.execute('''
+                CREATE VIRTUAL TABLE candidates_fts USING fts5(
+                    name_initials, 
+                    description, 
+                    nearest_station, 
+                    work_type,
+                    skills_text,
+                    tokenize='trigram'
+                )
+                ''')
+                # 既存データの移行（すでにテーブルがあった場合）
+                if row:
+                    cursor.execute('''
+                    INSERT INTO candidates_fts(rowid, name_initials, description, nearest_station, work_type, skills_text)
+                    SELECT c.id, c.name_initials, c.description, c.nearest_station, c.work_type, 
+                           (SELECT GROUP_CONCAT(s.name, ' ') FROM candidate_skills cs JOIN skills s ON cs.skill_id = s.id WHERE cs.candidate_id = c.id)
+                    FROM candidates c
+                    ''')
+
+            # 9. フィードバック用テーブル
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS match_feedback (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -154,6 +210,9 @@ class DBManager:
             # インデックスの作成
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_projects_email ON projects(email_message_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_project_skills_skill ON project_skills(skill_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_candidates_email ON candidates(email_message_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_candidate_skills_skill ON candidate_skills(skill_id)')
+
 
             # 既存DBへの embedding カラム追加
             try:
@@ -351,6 +410,97 @@ class DBManager:
 
         except sqlite3.Error as e:
             logging.error(f"Failed to save project: {e}")
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def save_candidate(self, email_message_id: str, candidate_data: Dict, skills: List[Dict], embedding: bytes = None) -> int:
+        """
+        抽出された人材情報を保存する
+        
+        Args:
+            email_message_id: 元メールのID
+            candidate_data: 人材情報の辞書
+            skills: スキルリスト [{'name': 'Java', 'type': 'must'}, ...]
+            embedding: 計算済みのベクトルデータ（bytes形式、オプション）
+            
+        Returns:
+            int: 作成されたCandidate ID
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # 1. 人材情報の保存
+            cursor.execute('''
+            INSERT INTO candidates (
+                email_message_id, name_initials, age, gender,
+                nearest_station, start_date, min_price, max_price,
+                work_type, description, embedding
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                email_message_id,
+                candidate_data.get('name_initials'),
+                candidate_data.get('age'),
+                candidate_data.get('gender'),
+                candidate_data.get('nearest_station'),
+                candidate_data.get('start_date'),
+                candidate_data.get('min_price'),
+                candidate_data.get('max_price'),
+                candidate_data.get('work_type'),
+                candidate_data.get('description'),
+                embedding
+            ))
+            
+            candidate_id = cursor.lastrowid
+            
+            # 2. スキル情報の保存と紐付け
+            skill_names = []
+            for skill in skills:
+                name = skill.get('name')
+                skill_type = skill.get('type', 'must')
+                
+                if not name:
+                    continue
+                    
+                skill_names.append(name)
+                
+                # スキルマスタへの登録（存在しなければ）
+                cursor.execute('INSERT OR IGNORE INTO skills (name) VALUES (?)', (name,))
+                
+                # スキルIDの取得
+                cursor.execute('SELECT id FROM skills WHERE name = ?', (name,))
+                skill_id = cursor.fetchone()[0]
+                
+                # 紐付け
+                cursor.execute('''
+                INSERT OR IGNORE INTO candidate_skills (candidate_id, skill_id, type)
+                VALUES (?, ?, ?)
+                ''', (candidate_id, skill_id, skill_type))
+            
+            # 3. FTSインデックスへの登録
+            skills_text = ' '.join(skill_names)
+            cursor.execute('''
+            INSERT INTO candidates_fts (rowid, name_initials, description, nearest_station, work_type, skills_text)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                candidate_id,
+                candidate_data.get('name_initials', ''),
+                candidate_data.get('description', ''),
+                candidate_data.get('nearest_station', ''),
+                candidate_data.get('work_type', ''),
+                skills_text
+            ))
+
+            conn.commit()
+            import logging
+            logging.info(f"Successfully saved candidate from email {email_message_id}")
+            return candidate_id
+
+        except sqlite3.Error as e:
+            import logging
+            logging.error(f"Failed to save candidate: {e}")
             conn.rollback()
             raise
         finally:
@@ -613,6 +763,16 @@ class DBManager:
                     cursor.execute(f"DELETE FROM projects_fts WHERE rowid IN ({p_placeholders})", project_ids)
                     cursor.execute(f"DELETE FROM projects WHERE id IN ({p_placeholders})", project_ids)
                 
+                # 紐づく人材情報を取得して削除
+                cursor.execute(f"SELECT id FROM candidates WHERE email_message_id IN ({placeholders})", batch_emails)
+                candidate_ids = [row[0] for row in cursor.fetchall()]
+
+                if candidate_ids:
+                    c_placeholders = ','.join(['?'] * len(candidate_ids))
+                    cursor.execute(f"DELETE FROM candidate_skills WHERE candidate_id IN ({c_placeholders})", candidate_ids)
+                    cursor.execute(f"DELETE FROM candidates_fts WHERE rowid IN ({c_placeholders})", candidate_ids)
+                    cursor.execute(f"DELETE FROM candidates WHERE id IN ({c_placeholders})", candidate_ids)
+
                 # メールの削除
                 cursor.execute(f"DELETE FROM emails WHERE message_id IN ({placeholders})", batch_emails)
                 

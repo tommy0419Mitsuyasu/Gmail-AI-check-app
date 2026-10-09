@@ -250,6 +250,68 @@ def get_email(email_id):
         logger.error(f"メール詳細取得中にエラーが発生しました: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+@api_bp.route('/api/match_candidates', methods=['POST'])
+def api_match_candidates():
+    """案件テキストに合致する人材を検索するAPI"""
+    try:
+        data = request.json
+        project_text = data.get('project_text', '')
+        exclude_freelance = data.get('exclude_freelance', False)
+        exclude_b2b = data.get('exclude_b2b', False)
+        
+        if not project_text:
+            return jsonify({'success': False, 'message': '案件テキストが指定されていません'}), 400
+            
+        from matching_engine import get_engine
+        engine = get_engine()
+        
+        # マッチングエンジン呼び出し
+        result = engine.match_candidates(
+            project_text=project_text, 
+            days=60, 
+            limit=200, 
+            min_score=10.0,
+            exclude_freelance=exclude_freelance,
+            exclude_b2b=exclude_b2b
+        )
+        
+        # APIレスポンス用にマッピング
+        formatted_matches = []
+        for match in result.get('matches', []):
+            gmail_url = f"https://mail.google.com/mail/u/0/#all/{match['message_id']}"
+            formatted_match = {
+                'id': match['candidate_id'],
+                'message_id': match['message_id'],
+                'name_initials': match['name_initials'],
+                'subject': match['subject'],
+                'sender': match['sender'],
+                'created_at': match['received_at'],
+                'age': match['age'],
+                'gender': match['gender'],
+                'nearest_station': match['nearest_station'],
+                'salary': match['min_price'],
+                'start_date': match['start_date'],
+                'work_type': match['work_type'],
+                'match_percentage': match['match_percentage'],
+                'matched_skills': match['hit_skills'],
+                'reasons': match['match_reasons'],
+                'description': match['description'],
+                'gmail_url': gmail_url
+            }
+            formatted_matches.append(formatted_match)
+
+        return jsonify({
+            'status': 'success',
+            'matches': formatted_matches,
+            'requirements': result.get('requirements', []),
+            'total_candidates': result.get('total_candidates', 0),
+            'matched_candidates': result.get('matched_candidates', 0)
+        })
+    except Exception as e:
+        logger.error(f"人材マッチング中にエラーが発生しました: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @api_bp.route('/api/save_skills', methods=['POST'])
 def save_skills():
     """解析されたスキルをセッションに保存するAPI"""
